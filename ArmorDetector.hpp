@@ -190,8 +190,9 @@ class ArmorDetector : public LibXR::Application
 
   // 发布/订阅
   ArmorDetectorResults armors_msg_{};  ///< 发布消息缓存
-  LibXR::Topic armors_topic_{
-      LibXR::Topic("/detector/armors", sizeof(ArmorDetectorResults))};  ///< 发布 Topic
+  LibXR::Topic::Domain armor_domain_ = LibXR::Topic::Domain("armor_detector");
+  LibXR::Topic armors_topic_ =  ///< 发布 Topic
+      LibXR::Topic("armors_result", sizeof(ArmorDetectorResults), &armor_domain_);
 
   // 相机信息
   cv::Point2f cam_center_{0.f, 0.f};                    ///< 成像中心（cx, cy）
