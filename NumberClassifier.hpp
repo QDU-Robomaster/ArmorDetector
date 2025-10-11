@@ -69,12 +69,6 @@ class NumberClassifier
    */
   void SetThreshold(double threshold) { threshold_ = threshold; }
 
-  /**
-   * @brief 是否显示调试窗口（数字 ROI）
-   * @param enabled true 则在分类时 imshow ROI
-   */
-  void SetShowDebug(bool enabled) { show_debug_ = enabled; }
-
  private:
   // ==== 工具函数 ====
 
@@ -110,5 +104,4 @@ class NumberClassifier
   cv::dnn::Net net_;                                ///< DNN 模型
   std::unordered_set<ArmorNumber> ignore_classes_;  ///< 忽略类别集合
   double threshold_ = 0.0;                          ///< 置信度阈值
-  bool show_debug_ = false;                         ///< 是否显示 ROI 调试窗
 };

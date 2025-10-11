@@ -199,11 +199,10 @@ void NumberClassifier::Classify(std::vector<Armor>& armors)
       continue;
     }
 
-    if (show_debug_)
-    {
-      cv::imshow("number", image);
-      cv::waitKey(1);
-    }
+#if defined(AUTO_AIM_PREVIEW_IMAGE) && AUTO_AIM_PREVIEW_IMAGE
+    cv::imshow("number", image);
+    cv::waitKey(1);
+#endif
 
     // 归一化到 [0,1]，保持单通道
     image.convertTo(image, CV_32F, 1.0 / 255.0);
