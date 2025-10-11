@@ -26,9 +26,7 @@ ArmorDetector::ArmorDetector(LibXR::HardwareContainer&, LibXR::ApplicationManage
         static bool inited = false;
         if (!inited)
         {
-#ifdef XR_LOG_PASS
           XR_LOG_PASS("Got camera info!");
-#endif
           inited = true;
 
           self->cam_center_ =
@@ -90,17 +88,10 @@ void ArmorDetector::InitClassifier()
 
 cv::Mat ArmorDetector::PreprocessImage(const cv::Mat& rgb_img)
 {
-  cv::Mat gray, binary;
+  cv::Mat gray;
   cv::cvtColor(rgb_img, gray, cv::COLOR_RGB2GRAY);
-  cv::threshold(gray, binary, binary_thres_, 255, cv::THRESH_BINARY);
-
-  static const cv::Mat KERNEL =
-      cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-
-  cv::morphologyEx(binary, binary, cv::MORPH_OPEN, KERNEL, cv::Point(-1, -1),
-                  1);
-
-  return binary;
+  cv::threshold(gray, gray, binary_thres_, 255, cv::THRESH_BINARY);
+  return gray;
 }
 
 std::vector<Light> ArmorDetector::FindLights(const cv::Mat& rgb_img,
@@ -257,8 +248,10 @@ std::vector<Armor> ArmorDetector::Detect(const cv::Mat& input)
 {
   binary_img_ = PreprocessImage(input);
 
+#if defined(AUTO_AIM_PREVIEW_IMAGE) && AUTO_AIM_PREVIEW_IMAGE
   cv::imshow("binary_img", binary_img_);
   cv::waitKey(1);
+#endif
   lights_ = FindLights(input, binary_img_);
   armors_ = MatchLights(lights_);
 
@@ -299,8 +292,11 @@ void ArmorDetector::ImageCallback(cv::Mat* img_msg)
     cv::drawMarker(frame, a.center, red, cv::MARKER_TILTED_CROSS, 18, 2);  // 装甲中心
     cv::line(frame, cam_center_, a.center, red, 1);
   }
+
+#if defined(AUTO_AIM_PREVIEW_IMAGE) && AUTO_AIM_PREVIEW_IMAGE
   cv::imshow("debug_pose_view", frame);
   cv::waitKey(1);
+#endif
 
   armors_msg_.clear();
 
@@ -346,10 +342,11 @@ void ArmorDetector::ImageCallback(cv::Mat* img_msg)
         r.at<double>(1, 1), r.at<double>(1, 2), r.at<double>(2, 0), r.at<double>(2, 1),
         r.at<double>(2, 2));
 
+    /* 这里还在相机坐标系，Z近似相机到装甲板的距离 */
     const auto EULR = armor_msg.pose.rotation.ToEulerAngle();
-    XR_LOG_DEBUG("Roll: %f, Pitch: %f, Yaw: %f", EULR[0], EULR[1], EULR[2]);
-    XR_LOG_DEBUG("x: %f, y: %f, z: %f", armor_msg.pose.translation.x(),
-                 armor_msg.pose.translation.y(), armor_msg.pose.translation.z());
+    XR_LOG_INFO("Armor Roll: %f, Pitch: %f, Yaw: %f", EULR[0], EULR[1], EULR[2]);
+    XR_LOG_INFO("Armor x: %f, y: %f, z: %f", armor_msg.pose.translation.x(),
+                armor_msg.pose.translation.y(), armor_msg.pose.translation.z());
 
     armor_msg.distance_to_image_center =
         pnp_solver_->CalculateDistanceToCenter(armor.center);
