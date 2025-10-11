@@ -34,16 +34,16 @@ enum class ArmorType : uint8_t
 /** @brief 装甲板编号。 */
 enum class ArmorNumber : uint8_t
 {
-  INVALID = 0,
-  ONE = 1,
-  TWO = 2,
-  THREE = 3,
-  FOUR = 4,
-  FIVE = 5,
-  OUTPOST = 6,
-  GUARD = 7,
-  BASE = 8,
-  NEGATIVE = 9,
+  ONE = 0,
+  TWO = 1,
+  THREE = 2,
+  FOUR = 3,
+  FIVE = 4,
+  OUTPOST = 5,
+  GUARD = 6,
+  BASE = 7,
+  NEGATIVE = 8,
+  INVALID = NEGATIVE,
 };
 
 /** @brief 装甲类型到字符串的映射（与 ArmorType 顺序一致）。 */

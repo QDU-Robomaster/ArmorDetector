@@ -90,10 +90,17 @@ void ArmorDetector::InitClassifier()
 
 cv::Mat ArmorDetector::PreprocessImage(const cv::Mat& rgb_img)
 {
-  cv::Mat gray;
+  cv::Mat gray, binary;
   cv::cvtColor(rgb_img, gray, cv::COLOR_RGB2GRAY);
-  cv::threshold(gray, gray, binary_thres_, 255, cv::THRESH_BINARY);
-  return gray;
+  cv::threshold(gray, binary, binary_thres_, 255, cv::THRESH_BINARY);
+
+  static const cv::Mat KERNEL =
+      cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+
+  cv::morphologyEx(binary, binary, cv::MORPH_OPEN, KERNEL, cv::Point(-1, -1),
+                  1);
+
+  return binary;
 }
 
 std::vector<Light> ArmorDetector::FindLights(const cv::Mat& rgb_img,
@@ -232,8 +239,8 @@ ArmorType ArmorDetector::IsArmor(const Light& light_1, const Light& light_2)
                                    CENTER_DISTANCE < a_.max_large_center_distance);
 
   const cv::Point2f DIFF = light_1.center - light_2.center;
-  const float ANGLE =
-      std::abs(std::atan2(DIFF.y, DIFF.x)) * 180.0f / static_cast<float>(CV_PI);
+  const float ANGLE = std::abs(std::atan2(std::abs(DIFF.y), std::abs(DIFF.x))) * 180.0f /
+                      static_cast<float>(CV_PI);
   const bool ANGLE_OK = ANGLE < a_.max_angle;
 
   const bool IS_ARMOR = LIGHT_RATIO_OK && CENTER_DISTANCE_OK && ANGLE_OK;
@@ -261,7 +268,7 @@ std::vector<Armor> ArmorDetector::Detect(const cv::Mat& input)
   }
   if (!armors_.empty())
   {
-    XR_LOG_DEBUG("Found %d armors", static_cast<int>(armors_.size()));
+    XR_LOG_INFO("Found %d armors", static_cast<int>(armors_.size()));
   }
 
   if (!armors_.empty() && classifier_)
@@ -274,17 +281,42 @@ std::vector<Armor> ArmorDetector::Detect(const cv::Mat& input)
 }
 
 // =========== 回调 / 发布 ===========
-
 void ArmorDetector::ImageCallback(cv::Mat* img_msg)
 {
-  const auto ARMORS = Detect(*img_msg);
-
-  if (pnp_solver_ == nullptr)
+  if (pnp_solver_ == nullptr || !cam_info_)
   {
+    // 没有相机信息或求解器就直接返回
     return;
   }
 
+  cv::Mat& frame = *img_msg;
+  const auto ARMORS = Detect(frame);
+
+  cv::Scalar green(0, 255, 0), red(0, 0, 255);
+  cv::drawMarker(frame, cam_center_, green, cv::MARKER_CROSS, 20, 2);  // 主点
+  for (const auto& a : ARMORS)
+  {
+    cv::drawMarker(frame, a.center, red, cv::MARKER_TILTED_CROSS, 18, 2);  // 装甲中心
+    cv::line(frame, cam_center_, a.center, red, 1);
+  }
+  cv::imshow("debug_pose_view", frame);
+  cv::waitKey(1);
+
   armors_msg_.clear();
+
+  const double FX = cam_info_->camera_matrix[0];
+  const double FY = cam_info_->camera_matrix[4];
+  const double CX = cam_info_->camera_matrix[2];
+  const double CY = cam_info_->camera_matrix[5];
+
+  const double K1 = cam_info_->distortion_coefficients.plumb_bob.k1;
+  const double K2 = cam_info_->distortion_coefficients.plumb_bob.k2;
+  const double P1 = cam_info_->distortion_coefficients.plumb_bob.p1;
+  const double P2 = cam_info_->distortion_coefficients.plumb_bob.p2;
+  const double K3 = cam_info_->distortion_coefficients.plumb_bob.k3;
+
+  cv::Mat k_use = (cv::Mat_<double>(3, 3) << FX, 0, CX, 0, FY, CY, 0, 0, 1);
+  cv::Mat dist_use = (cv::Mat_<double>(1, 5) << K1, K2, P1, P2, K3);
 
   for (const auto& armor : ARMORS)
   {
@@ -297,6 +329,7 @@ void ArmorDetector::ImageCallback(cv::Mat* img_msg)
     }
 
     XR_LOG_DEBUG("Got armor pose!");
+    const double Z = std::max(1e-9, tvec.at<double>(2));
 
     ArmorDetectorResult armor_msg;
     armor_msg.type = armor.type;
@@ -304,7 +337,7 @@ void ArmorDetector::ImageCallback(cv::Mat* img_msg)
 
     armor_msg.pose.translation.x() = tvec.at<double>(0);
     armor_msg.pose.translation.y() = tvec.at<double>(1);
-    armor_msg.pose.translation.z() = tvec.at<double>(2);
+    armor_msg.pose.translation.z() = Z;
 
     cv::Mat r;
     cv::Rodrigues(rvec, r);

@@ -43,10 +43,10 @@ depends:
 
 // Project
 #include "CameraBase.hpp"
+#include "NumberClassifier.hpp"
 #include "armor.hpp"
 #include "libxr.hpp"
 #include "message.hpp"
-#include "number_classifier.hpp"
 #include "pnp_solver.hpp"
 
 class ArmorDetector : public LibXR::Application
@@ -85,7 +85,7 @@ class ArmorDetector : public LibXR::Application
   struct Config
   {
     ClassifierParams classifier;  ///< 分类器参数
-    int detect_color{1};          ///< 要检测的目标颜色 (RED/BLUE)
+    int detect_color{1};          ///< 要检测的目标颜色 (RED:0/BLUE:1)
     int binary_thres{85};         ///< 二值化阈值
     LightParams light{};          ///< 灯条筛选参数
     ArmorParams armor{};          ///< 装甲匹配参数
