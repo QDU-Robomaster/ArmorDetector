@@ -59,16 +59,16 @@ void NumberClassifier::FillSrcDstQuads(const Armor& armor, cv::Point2f dst[4],
 {
   // 目标四边形（展开图）：
   // 将灯条竖直高度放在展开图的中间，便于从中部截数字。
-  const int top_y = (K_WARP_HEIGHT - K_LIGHT_LENGTH) / 2 - 1;
-  const int bottom_y = top_y + K_LIGHT_LENGTH;
-  const int warp_w = WarpWidthFor(armor.type);
+  const int TOP_Y = (K_WARP_HEIGHT - K_LIGHT_LENGTH) / 2 - 1;
+  const int BOTTOM_Y = TOP_Y + K_LIGHT_LENGTH;
+  const int WARP_W = WarpWidthFor(armor.type);
 
-  dst[0] = cv::Point2f(0.f, static_cast<float>(bottom_y));  // 左下
-  dst[1] = cv::Point2f(0.f, static_cast<float>(top_y));     // 左上
-  dst[2] = cv::Point2f(static_cast<float>(warp_w - 1),
-                       static_cast<float>(top_y));  // 右上
-  dst[3] = cv::Point2f(static_cast<float>(warp_w - 1),
-                       static_cast<float>(bottom_y));  // 右下
+  dst[0] = cv::Point2f(0.f, static_cast<float>(BOTTOM_Y));  // 左下
+  dst[1] = cv::Point2f(0.f, static_cast<float>(TOP_Y));     // 左上
+  dst[2] = cv::Point2f(static_cast<float>(WARP_W - 1),
+                       static_cast<float>(TOP_Y));  // 右上
+  dst[3] = cv::Point2f(static_cast<float>(WARP_W - 1),
+                       static_cast<float>(BOTTOM_Y));  // 右下
 
   // 源四边形（像素坐标）：
   // 按 左下/左上/右上/右下，与目标顶点一一对应。
@@ -93,12 +93,12 @@ cv::Mat NumberClassifier::Softmax(const cv::Mat& logits)
   // 支持 (1,C) 或 (1,C,1,1)，展平到 1xC 进行 softmax。
   CV_Assert(!logits.empty());
   cv::Mat flat = logits.reshape(1, 1);  // 1 x (C or C*1*1)
-  const float max_logit = *std::max_element(flat.begin<float>(), flat.end<float>());
+  const float MAX_LOGIT = *std::max_element(flat.begin<float>(), flat.end<float>());
   cv::Mat exps;
-  cv::exp(flat - max_logit, exps);
-  const float sum = static_cast<float>(cv::sum(exps)[0]);
-  const float safe = std::max(sum, 1e-12f);
-  return exps / safe;  // 1 x C
+  cv::exp(flat - MAX_LOGIT, exps);
+  const float SUM = static_cast<float>(cv::sum(exps)[0]);
+  const float SAFE = std::max(SUM, 1e-12f);
+  return exps / SAFE;  // 1 x C
 }
 
 // ================== 类实现 ==================
@@ -136,34 +136,34 @@ void NumberClassifier::ExtractNumbers(const cv::Mat& src, std::vector<Armor>& ar
     cv::Point2f src_vertices[4];
     FillSrcDstQuads(armor, dst_vertices, src_vertices);
 
-    const int warp_w = WarpWidthFor(armor.type);
+    const int WARP_W = WarpWidthFor(armor.type);
     cv::Mat number_image;
     const cv::Mat M = cv::getPerspectiveTransform(src_vertices, dst_vertices);
     cv::warpPerspective(src, number_image, M,
-                        cv::Size(warp_w, K_WARP_HEIGHT),  // <-- NOTE: typo fix below
+                        cv::Size(WARP_W, K_WARP_HEIGHT),  // <-- NOTE: typo fix below
                         cv::INTER_LINEAR, cv::BORDER_REPLICATE);
 
     // （修正：上行拼写应为 K_WARP_HEIGHT）
     if (number_image.rows != K_WARP_HEIGHT)
     {
       // 某些平台上，意外的 size 也进行一次强制调整
-      cv::resize(number_image, number_image, cv::Size(warp_w, K_WARP_HEIGHT), 0, 0,
+      cv::resize(number_image, number_image, cv::Size(WARP_W, K_WARP_HEIGHT), 0, 0,
                  cv::INTER_LINEAR);
     }
 
     // 2) 截取中间数字 ROI（安全裁剪）
-    const int x = (warp_w - K_ROI_W) / 2;
-    const int y = 0;
-    const cv::Rect want_roi{x, y, K_ROI_W, K_ROI_H};
-    const cv::Rect roi = SafeRoi(number_image.size(), want_roi);
-    if (roi.width != K_ROI_W || roi.height != K_ROI_H)
+    const int X = (WARP_W - K_ROI_W) / 2;
+    const int Y = 0;
+    const cv::Rect WANTED_ROI{X, Y, K_ROI_W, K_ROI_H};
+    const cv::Rect ROI = SafeRoi(number_image.size(), WANTED_ROI);
+    if (ROI.width != K_ROI_W || ROI.height != K_ROI_H)
     {
       XR_LOG_DEBUG("Number ROI clipped: want=(%d,%d,%d,%d), got=(%d,%d,%d,%d)",
-                   want_roi.x, want_roi.y, want_roi.width, want_roi.height, roi.x, roi.y,
-                   roi.width, roi.height);
+                   WANTED_ROI.x, WANTED_ROI.y, WANTED_ROI.width, WANTED_ROI.height, ROI.x,
+                   ROI.y, ROI.width, ROI.height);
     }
 
-    cv::Mat digit = number_image(roi).clone();
+    cv::Mat digit = number_image(ROI).clone();
 
     // 3) 灰度 + Otsu 二值化
     if (digit.channels() == 3)
@@ -227,12 +227,12 @@ void NumberClassifier::Classify(std::vector<Armor>& armors)
     double confidence = 0.0;
     cv::Point class_id;
     cv::minMaxLoc(prob.reshape(1, 1), nullptr, &confidence, nullptr, &class_id);
-    const int label_id = class_id.x;
+    const int LABEL_INDEX = class_id.x;
 
     armor.confidence = static_cast<float>(confidence);
-    armor.number = static_cast<ArmorNumber>(label_id);
+    armor.number = static_cast<ArmorNumber>(LABEL_INDEX);
 
-    XR_LOG_INFO("Number: %d, confidence: %.3f", label_id, armor.confidence);
+    XR_LOG_INFO("Number: %d, confidence: %.3f", LABEL_INDEX, armor.confidence);
   }
 
   // 末端过滤：阈值、忽略类别、大小-数字先验

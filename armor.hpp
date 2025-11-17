@@ -3,8 +3,6 @@
 /** @file armor.hpp
  *  @brief 装甲板相关基础类型与数据结构。
  */
-
-#include <array>
 #include <opencv2/core.hpp>
 
 // STL

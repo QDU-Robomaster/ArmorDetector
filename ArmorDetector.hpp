@@ -46,6 +46,7 @@ depends:
 #include "NumberClassifier.hpp"
 #include "armor.hpp"
 #include "libxr.hpp"
+#include "libxr_rw.hpp"
 #include "message.hpp"
 #include "pnp_solver.hpp"
 
@@ -128,6 +129,8 @@ class ArmorDetector : public LibXR::Application
   /** @brief 获取当前配置快照。 */
   const Config& GetConfig() const { return cfg_cache_; }
 
+  static int CommandFun(ArmorDetector* self, int argc, char** argv);
+
  private:
   // —— 图像管线 ——
   /** @brief 预处理：RGB→灰度→二值化。
@@ -197,4 +200,8 @@ class ArmorDetector : public LibXR::Application
   // 相机信息
   cv::Point2f cam_center_{0.f, 0.f};                    ///< 成像中心（cx, cy）
   std::shared_ptr<CameraBase::CameraInfo> cam_info_{};  ///< 相机内参/畸变
+
+  const char* name_ = "armor_detector";
+  LibXR::RamFS::File cmd_file_;
+  std::atomic<bool> params_is_changed_{false};
 };

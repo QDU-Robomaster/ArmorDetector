@@ -1,8 +1,9 @@
 #include "ArmorDetector.hpp"
 
+#include "libxr_rw.hpp"
 #include "logger.hpp"
 
-ArmorDetector::ArmorDetector(LibXR::HardwareContainer&, LibXR::ApplicationManager& app,
+ArmorDetector::ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
                              Config cfg)
     : cfg_cache_(cfg),
       binary_thres_(cfg.binary_thres),
@@ -10,9 +11,12 @@ ArmorDetector::ArmorDetector(LibXR::HardwareContainer&, LibXR::ApplicationManage
       l_(cfg.light),
       a_(cfg.armor),
       classifier_threshold_(cfg.classifier.threshold),
-      ignore_classes_(cfg.classifier.ignore_classes)
+      ignore_classes_(cfg.classifier.ignore_classes),
+      cmd_file_(LibXR::RamFS::CreateFile(name_, CommandFun, this))
 {
   XR_LOG_INFO("Starting ArmorDetector (with Config).");
+
+  hw.template FindOrExit<LibXR::RamFS>({"ramfs"})->Add(cmd_file_);
 
   // 初始化分类器
   InitClassifier();
@@ -57,6 +61,11 @@ ArmorDetector::ArmorDetector(LibXR::HardwareContainer&, LibXR::ApplicationManage
       {
         XR_LOG_DEBUG("Got image!");
         auto* img_msg = reinterpret_cast<cv::Mat*>(data.addr_);
+        if (self->params_is_changed_ == true)
+        {
+          self->SetConfig(self->cfg_cache_);
+          self->params_is_changed_ = false;
+        }
         self->ImageCallback(img_msg);
       },
       this);
@@ -356,4 +365,129 @@ void ArmorDetector::ImageCallback(cv::Mat* img_msg)
 
   // 发布
   armors_topic_.Publish(armors_msg_);
+}
+
+int ArmorDetector::CommandFun(ArmorDetector* self, int argc, char** argv)
+{
+  if (argc == 1)
+  {
+    LibXR::STDIO::Printf("ArmorDetector\n\n");
+    LibXR::STDIO::Printf("Usage:\r\n");
+    LibXR::STDIO::Printf("  show\r\n");
+    LibXR::STDIO::Printf("  binary_thres <value>\r\n");
+    LibXR::STDIO::Printf("  detect_color <value>\r\n");
+    LibXR::STDIO::Printf("  classifier_thres <value>\r\n");
+    LibXR::STDIO::Printf("  light_min_ratio <value>\r\n");
+    LibXR::STDIO::Printf("  light_max_ratio <value>\r\n");
+    LibXR::STDIO::Printf("  light_max_angle <value>\r\n");
+    LibXR::STDIO::Printf("  armor_min_light_ratio <value>\r\n");
+    LibXR::STDIO::Printf("  armor_min_small_center_distance <value>\r\n");
+    LibXR::STDIO::Printf("  armor_max_small_center_distance <value>\r\n");
+    LibXR::STDIO::Printf("  armor_min_large_center_distance <value>\r\n");
+    LibXR::STDIO::Printf("  armor_max_large_center_distance <value>\r\n");
+    LibXR::STDIO::Printf("  armor_max_angle <value>\r\n");
+    return 0;
+  }
+  else if (argc == 2)
+  {
+    std::string cmd = argv[1];
+    if (cmd == "show")
+    {
+      // clang-format off
+      LibXR::STDIO::Printf("name: ArmorDetector\r\n");
+      LibXR::STDIO::Printf("cfg: \r\n");
+      LibXR::STDIO::Printf("  classifier: \r\n");
+      LibXR::STDIO::Printf("    ignore_classes: \r\n");
+      LibXR::STDIO::Printf("      - ArmorNumber::NEGATIVE\r\n");
+      LibXR::STDIO::Printf("    threshold: %f\r\n", self->cfg_cache_.classifier.threshold);
+      LibXR::STDIO::Printf("  detect_color: %d\r\n", self->cfg_cache_.detect_color);
+      LibXR::STDIO::Printf("  binary_thres: %d\r\n", self->cfg_cache_.binary_thres);
+      LibXR::STDIO::Printf("  light: \r\n");
+      LibXR::STDIO::Printf("    min_ratio: %f\r\n", self->cfg_cache_.light.min_ratio);
+      LibXR::STDIO::Printf("    max_ratio: %f\r\n", self->cfg_cache_.light.max_ratio);
+      LibXR::STDIO::Printf("    max_angle: %f\r\n", self->cfg_cache_.light.max_angle);
+      LibXR::STDIO::Printf("  armor: \r\n");
+      LibXR::STDIO::Printf("    min_light_ratio: %f\r\n", self->cfg_cache_.armor.min_light_ratio);
+      LibXR::STDIO::Printf("    min_small_center_distance: %f\r\n", self->cfg_cache_.armor.min_small_center_distance);
+      LibXR::STDIO::Printf("    max_small_center_distance: %f\r\n", self->cfg_cache_.armor.max_small_center_distance);
+      LibXR::STDIO::Printf("    min_large_center_distance: %f\r\n", self->cfg_cache_.armor.min_large_center_distance);
+      LibXR::STDIO::Printf("    max_large_center_distance: %f\r\n", self->cfg_cache_.armor.max_large_center_distance);
+      LibXR::STDIO::Printf("    max_angle: %f\r\n", self->cfg_cache_.armor.max_angle);
+      // clang-format on
+    }
+    return 0;
+  }
+  else if (argc == 3)
+  {
+    self->params_is_changed_ = false;
+    std::string cmd = argv[1];
+    if (cmd == "binary_thres")
+    {
+      self->cfg_cache_.binary_thres = std::stoi(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "detect_color")
+    {
+      self->cfg_cache_.detect_color = std::stoi(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "classifier_thres")
+    {
+      self->cfg_cache_.classifier.threshold = std::stoi(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "light_min_ratio")
+    {
+      self->cfg_cache_.light.min_ratio = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "light_max_ratio")
+    {
+      self->cfg_cache_.light.max_ratio = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "light_max_angle")
+    {
+      self->cfg_cache_.light.max_angle = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "armor_min_light_ratio")
+    {
+      self->cfg_cache_.armor.min_light_ratio = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "armor_min_small_center_distance")
+    {
+      self->cfg_cache_.armor.min_small_center_distance = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "armor_max_small_center_distance")
+    {
+      self->cfg_cache_.armor.max_small_center_distance = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "armor_min_large_center_distance")
+    {
+      self->cfg_cache_.armor.min_large_center_distance = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "armor_max_large_center_distance")
+    {
+      self->cfg_cache_.armor.max_large_center_distance = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else if (cmd == "armor_max_angle")
+    {
+      self->cfg_cache_.armor.max_angle = std::stod(argv[2]);
+      self->params_is_changed_ = true;
+    }
+    else
+    {
+      LibXR::STDIO::Printf("Unknown command: %s\n", argv[1]);
+      return -1;
+    }
+    return 0;
+  }
+  LibXR::STDIO::Printf("Unknown command: %s\n", argv[1]);
+  return -1;
 }
