@@ -45,8 +45,6 @@ depends:
 #include "CameraBase.hpp"
 #include "NumberClassifier.hpp"
 #include "armor.hpp"
-#include "libxr.hpp"
-#include "libxr_rw.hpp"
 #include "message.hpp"
 #include "pnp_solver.hpp"
 
@@ -58,9 +56,9 @@ class ArmorDetector : public LibXR::Application
   /** @brief 灯条几何筛选参数。*/
   struct LightParams
   {
-    double min_ratio{0.1};   ///< 宽高比下限 (width/height)
-    double max_ratio{0.4};   ///< 宽高比上限
-    double max_angle{40.0};  ///< 允许的最大倾角(度)
+    double min_ratio{0.1};         ///< 宽高比下限 (width/height)
+    double max_ratio{0.4};         ///< 宽高比上限
+    double light_max_angle{40.0};  ///< 允许的最大倾角(度)
   };
 
   /** @brief 装甲匹配与姿态相关参数。*/
@@ -78,8 +76,8 @@ class ArmorDetector : public LibXR::Application
   struct ClassifierParams
   {
     std::initializer_list<ArmorNumber> ignore_classes{
-        ArmorNumber::NEGATIVE};  ///< 忽略的类别标签
-    double threshold{0.7};       ///< 置信度阈值
+        ArmorNumber::NEGATIVE};        ///< 忽略的类别标签
+    double classifier_threshold{0.7};  ///< 置信度阈值
   };
 
   /** @brief 检测器整体配置。*/
@@ -130,6 +128,11 @@ class ArmorDetector : public LibXR::Application
   const Config& GetConfig() const { return cfg_cache_; }
 
   static int CommandFun(ArmorDetector* self, int argc, char** argv);
+
+  static int CommandAdapter(void* instance, int argc, char** argv)
+  {
+    return CommandFun(static_cast<ArmorDetector*>(instance), argc, argv);
+  }
 
  private:
   // —— 图像管线 ——
