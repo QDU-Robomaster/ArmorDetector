@@ -2,11 +2,24 @@
 
 #include <opencv2/calib3d.hpp>
 
-PnPSolver::PnPSolver(std::array<double, 9>& camera_matrix,
-                     std::array<double, 5>& dist_coeffs)
-    : camera_matrix_(cv::Mat(3, 3, CV_64F, camera_matrix.data()).clone()),
-      dist_coeffs_(cv::Mat(1, 5, CV_64F, dist_coeffs.data()).clone())
+PnPSolver::PnPSolver(const CameraBase::CameraInfo& camera_info)
+    : camera_matrix_(cv::Mat(3, 3, CV_64F,
+                             const_cast<double*>(camera_info.camera_matrix.data()))
+                         .clone())
 {
+  const auto dist_coeffs = CameraBase::CameraInfo::ToPnPDistCoeffs(
+      camera_info.distortion_model, camera_info.distortion_coefficients);
+  if (dist_coeffs.empty())
+  {
+    dist_coeffs_ = cv::Mat();
+  }
+  else
+  {
+    dist_coeffs_ = cv::Mat(1, static_cast<int>(dist_coeffs.size()), CV_64F,
+                           const_cast<double*>(dist_coeffs.data()))
+                       .clone();
+  }
+
   // 将毫米转换为米，并构造模型点
   constexpr double SMALL_HALF_T = SMALL_ARMOR_WIDTH * 0.5 / 1000.0;
   constexpr double SMALL_HALF_Z = SMALL_ARMOR_HEIGHT * 0.5 / 1000.0;
@@ -28,17 +41,17 @@ PnPSolver::PnPSolver(std::array<double, 9>& camera_matrix,
       {0.0f, static_cast<float>(-LARGE_HALF_Y), static_cast<float>(-LARGE_HALF_Z)}};
 }
 
-bool PnPSolver::SolvePnP(const Armor& armor, cv::Mat& rvec, cv::Mat& tvec)
+bool PnPSolver::SolvePnP(const std::array<cv::Point2f, 4>& image_armor_points,
+                         ArmorType armor_type, cv::Mat& rvec, cv::Mat& tvec) const
 {
-  // 填充图像点，顺序与模型点一致：左下、左上、右上、右下
-  std::vector<cv::Point2f> image_armor_points = {
-      armor.left_light.bottom, armor.left_light.top, armor.right_light.top,
-      armor.right_light.bottom};
+  const std::vector<cv::Point2f> image_points = {
+      image_armor_points[3], image_armor_points[0], image_armor_points[1],
+      image_armor_points[2]};
 
   const auto& object_points =
-      (armor.type == ArmorType::SMALL) ? small_armor_points_ : large_armor_points_;
+      (armor_type == ArmorType::SMALL) ? small_armor_points_ : large_armor_points_;
 
-  return cv::solvePnP(object_points, image_armor_points, camera_matrix_, dist_coeffs_,
+  return cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
                       rvec, tvec, false, cv::SOLVEPNP_IPPE);
 }
 
