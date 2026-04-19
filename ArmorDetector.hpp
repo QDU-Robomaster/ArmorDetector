@@ -90,6 +90,7 @@ class ArmorDetector : public LibXR::Application
 
   struct Config
   {
+    // 0 = red, 1 = blue, 2 = any
     int detect_color{1};
     TraditionalParams traditional{};
     YoloParams yolo{};

@@ -29,7 +29,15 @@ constexpr float POINT_RADIUS = 4.0F;
 
 ArmorColor detect_color_from_config(int detect_color)
 {
-  return (detect_color == 0) ? ArmorColor::RED : ArmorColor::BLUE;
+  if (detect_color == 0)
+  {
+    return ArmorColor::RED;
+  }
+  if (detect_color == 1)
+  {
+    return ArmorColor::BLUE;
+  }
+  return ArmorColor::UNKNOWN;
 }
 
 ArmorColor color_from_yolo_id(int color_id)
@@ -553,7 +561,9 @@ std::vector<ArmorDetector::CandidateArmor> ArmorDetector::Parse(
     armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
     UpdateGeometryMetrics(armor);
 
-    if (armor.color != target_color ||
+    const bool color_mismatch =
+        (target_color != ArmorColor::UNKNOWN) && (armor.color != target_color);
+    if (color_mismatch ||
         armor.number == ArmorNumber::NEGATIVE ||
         armor.confidence < static_cast<float>(cfg_.yolo.min_confidence))
     {
@@ -994,9 +1004,11 @@ void ArmorDetector::ShowDebugPreview(const cv::Mat& bgr_img, const cv::Mat* bina
                 cv::FONT_HERSHEY_DUPLEX, 0.72, cv::Scalar(243, 246, 250), 1,
                 cv::LINE_AA);
     panel_y += 28;
+    const ArmorColor configured_target_color = detect_color_from_config(cfg_.detect_color);
     draw_info_row(canvas, panel_x, panel_y, "target_color",
-                  detect_color_from_config(cfg_.detect_color) == ArmorColor::BLUE ? "blue"
-                                                                                   : "red",
+                  configured_target_color == ArmorColor::BLUE
+                      ? "blue"
+                      : (configured_target_color == ArmorColor::RED ? "red" : "any"),
                   cv::Scalar(240, 244, 250));
     panel_y += 24;
     draw_info_row(canvas, panel_x, panel_y, "score_thres",

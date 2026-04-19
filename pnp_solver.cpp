@@ -1,5 +1,9 @@
 #include "pnp_solver.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+
 #include <opencv2/calib3d.hpp>
 
 PnPSolver::PnPSolver(const CameraBase::CameraInfo& camera_info)
@@ -44,15 +48,54 @@ PnPSolver::PnPSolver(const CameraBase::CameraInfo& camera_info)
 bool PnPSolver::SolvePnP(const std::array<cv::Point2f, 4>& image_armor_points,
                          ArmorType armor_type, cv::Mat& rvec, cv::Mat& tvec) const
 {
-  const std::vector<cv::Point2f> image_points = {
+  const std::array<cv::Point2f, 4> base_points = {
       image_armor_points[3], image_armor_points[0], image_armor_points[1],
       image_armor_points[2]};
 
   const auto& object_points =
       (armor_type == ArmorType::SMALL) ? small_armor_points_ : large_armor_points_;
+  std::array<int, 4> order = {0, 1, 2, 3};
+  constexpr std::array<int, 3> methods = {
+      cv::SOLVEPNP_IPPE,
+      cv::SOLVEPNP_ITERATIVE,
+      cv::SOLVEPNP_EPNP,
+  };
 
-  return cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
-                      rvec, tvec, false, cv::SOLVEPNP_IPPE);
+  do
+  {
+    const std::vector<cv::Point2f> image_points = {
+        base_points[order[0]], base_points[order[1]], base_points[order[2]],
+        base_points[order[3]]};
+
+    for (const int method : methods)
+    {
+      cv::Mat candidate_rvec;
+      cv::Mat candidate_tvec;
+      if (!cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
+                        candidate_rvec, candidate_tvec, false, method))
+      {
+        continue;
+      }
+
+      if (candidate_rvec.empty() || candidate_tvec.empty())
+      {
+        continue;
+      }
+
+      const double z = candidate_tvec.at<double>(2);
+      if (!std::isfinite(z) || z <= 1e-6)
+      {
+        continue;
+      }
+
+      rvec = candidate_rvec;
+      tvec = candidate_tvec;
+      return true;
+    }
+  }
+  while (std::next_permutation(order.begin(), order.end()));
+
+  return false;
 }
 
 double PnPSolver::CalculateDistanceToCenter(const cv::Point2f& image_point)
