@@ -32,7 +32,7 @@ using SharedImageTopic = LibXR::LinuxSharedTopic<CameraBase::SharedImageFrame>;
 
 const char* SharedImageTopicName()
 {
-  return CameraBase::kSharedImageTopicName;
+  return CameraBase::SharedImageFrame::topic_name;
 }
 
 int CvTypeFromEncoding(CameraBase::Encoding encoding)
@@ -375,23 +375,18 @@ void ArmorDetector::ProcessImage(const cv::Mat& img_msg, uint64_t image_timestam
 
 void ArmorDetector::ProcessSharedImageFrame(const CameraBase::SharedImageFrame& frame)
 {
-  if (frame.width == 0 || frame.height == 0 || frame.step == 0 || frame.data_size == 0)
-  {
-    return;
-  }
-  if (frame.data_size > CameraBase::kSharedImageMaxBytes)
+  if (frame.data_size > CameraBase::SharedImageFrame::max_bytes)
   {
     XR_LOG_WARN(
         "ArmorDetector shared image frame exceeds max bytes: %u > %zu",
-        frame.data_size, CameraBase::kSharedImageMaxBytes);
+        frame.data_size, CameraBase::SharedImageFrame::max_bytes);
     return;
   }
-  if (static_cast<size_t>(frame.step) * static_cast<size_t>(frame.height) >
-      frame.data_size)
+  if (!CameraBase::SharedImageFrame::HasValidPayload(frame))
   {
     XR_LOG_WARN(
-        "ArmorDetector shared image frame has inconsistent geometry: step=%u height=%u data_size=%u",
-        frame.step, frame.height, frame.data_size);
+        "ArmorDetector shared image frame has inconsistent geometry: width=%u height=%u step=%u data_size=%u",
+        frame.width, frame.height, frame.step, frame.data_size);
     return;
   }
 
