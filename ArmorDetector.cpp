@@ -16,6 +16,7 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include "linux_shared_topic.hpp"
 #include "logger.hpp"
 
 namespace
@@ -26,6 +27,57 @@ constexpr int INFO_PANEL_WIDTH = 360;
 constexpr int MAX_DEBUG_ARMORS = 6;
 constexpr double HEADER_BAR_ALPHA = 0.78;
 constexpr float POINT_RADIUS = 4.0F;
+constexpr uint32_t SHARED_IMAGE_WAIT_TIMEOUT_MS = 100;
+using SharedImageTopic = LibXR::LinuxSharedTopic<CameraBase::SharedImageFrame>;
+
+const char* SharedImageTopicName()
+{
+  return CameraBase::kSharedImageTopicName;
+}
+
+int CvTypeFromEncoding(CameraBase::Encoding encoding)
+{
+  switch (encoding)
+  {
+    case CameraBase::Encoding::RGB8:
+    case CameraBase::Encoding::BGR8:
+      return CV_8UC3;
+    case CameraBase::Encoding::RGBA8:
+    case CameraBase::Encoding::BGRA8:
+      return CV_8UC4;
+    case CameraBase::Encoding::MONO8:
+      return CV_8UC1;
+    default:
+      return -1;
+  }
+}
+
+cv::Mat ConvertToBgrWithEncoding(const cv::Mat& input, CameraBase::Encoding encoding)
+{
+  switch (encoding)
+  {
+    case CameraBase::Encoding::RGB8:
+    {
+      cv::Mat output;
+      cv::cvtColor(input, output, cv::COLOR_RGB2BGR);
+      return output;
+    }
+    case CameraBase::Encoding::BGRA8:
+    {
+      cv::Mat output;
+      cv::cvtColor(input, output, cv::COLOR_BGRA2BGR);
+      return output;
+    }
+    case CameraBase::Encoding::RGBA8:
+    {
+      cv::Mat output;
+      cv::cvtColor(input, output, cv::COLOR_RGBA2BGR);
+      return output;
+    }
+    default:
+      return input;
+  }
+}
 
 ArmorColor detect_color_from_config(int detect_color)
 {
@@ -222,25 +274,9 @@ ArmorDetector::ArmorDetector(LibXR::HardwareContainer&, LibXR::ApplicationManage
   SetConfig(cfg);
   pnp_solver_ = std::make_unique<PnPSolver>(camera_info_);
 
-  auto header_topic = LibXR::Topic(LibXR::Topic::Find("image_header"));
-  auto header_cb = LibXR::Topic::Callback::Create(
-      [](bool, ArmorDetector* self, LibXR::RawData& data)
-      {
-        auto* image_header = reinterpret_cast<CameraBase::ImageHeader*>(data.addr_);
-        self->HeaderCallback(image_header);
-      },
-      this);
-  header_topic.RegisterCallback(header_cb);
-
-  auto image_topic = LibXR::Topic(LibXR::Topic::Find("image_raw"));
-  auto image_cb = LibXR::Topic::Callback::Create(
-      [](bool, ArmorDetector* self, LibXR::RawData& data)
-      {
-        auto* image = reinterpret_cast<cv::Mat*>(data.addr_);
-        self->ImageCallback(image);
-      },
-      this);
-  image_topic.RegisterCallback(image_cb);
+  shared_image_thread_.Create(this, SharedImageThreadFun, "ArmorDetShared",
+                              static_cast<size_t>(1024 * 128),
+                              LibXR::Thread::Priority::HIGH);
 
   app.Register(*this);
 }
@@ -282,25 +318,17 @@ void ArmorDetector::SetConfig(const Config& cfg)
   }
 }
 
-void ArmorDetector::HeaderCallback(CameraBase::ImageHeader* image_header)
+void ArmorDetector::ProcessImage(const cv::Mat& img_msg, uint64_t image_timestamp_us)
 {
-  if (image_header == nullptr)
+  if (img_msg.empty())
   {
     return;
   }
 
-  latest_timestamp_us_ = static_cast<uint64_t>(image_header->timestamp);
-}
-
-void ArmorDetector::ImageCallback(cv::Mat* img_msg)
-{
-  if (img_msg == nullptr || img_msg->empty())
-  {
-    return;
-  }
+  latest_timestamp_us_ = image_timestamp_us;
 
   const auto start_time = std::chrono::steady_clock::now();
-  const cv::Mat bgr_img = ConvertToBgr(*img_msg);
+  const cv::Mat& bgr_img = img_msg;
 
   cv::Mat binary_debug;
   cv::Mat* binary_debug_ptr = nullptr;
@@ -345,30 +373,94 @@ void ArmorDetector::ImageCallback(cv::Mat* img_msg)
   }
 }
 
-cv::Mat ArmorDetector::ConvertToBgr(const cv::Mat& input) const
+void ArmorDetector::ProcessSharedImageFrame(const CameraBase::SharedImageFrame& frame)
 {
-  switch (camera_info_.encoding)
+  if (frame.width == 0 || frame.height == 0 || frame.step == 0 || frame.data_size == 0)
   {
-    case CameraBase::Encoding::RGB8:
+    return;
+  }
+  if (frame.data_size > CameraBase::kSharedImageMaxBytes)
+  {
+    XR_LOG_WARN(
+        "ArmorDetector shared image frame exceeds max bytes: %u > %zu",
+        frame.data_size, CameraBase::kSharedImageMaxBytes);
+    return;
+  }
+  if (static_cast<size_t>(frame.step) * static_cast<size_t>(frame.height) >
+      frame.data_size)
+  {
+    XR_LOG_WARN(
+        "ArmorDetector shared image frame has inconsistent geometry: step=%u height=%u data_size=%u",
+        frame.step, frame.height, frame.data_size);
+    return;
+  }
+
+  const int cv_type = CvTypeFromEncoding(frame.encoding);
+  if (cv_type < 0)
+  {
+    XR_LOG_WARN("ArmorDetector shared image encoding unsupported: %u",
+                static_cast<unsigned>(frame.encoding));
+    return;
+  }
+
+  cv::Mat img(static_cast<int>(frame.height), static_cast<int>(frame.width), cv_type,
+              const_cast<uint8_t*>(frame.data.data()), static_cast<size_t>(frame.step));
+  const cv::Mat bgr_img = ConvertToBgrWithEncoding(img, frame.encoding);
+  if (bgr_img.empty())
+  {
+    return;
+  }
+  ProcessImage(bgr_img, frame.timestamp_us);
+}
+
+void ArmorDetector::SharedImageThreadFun(ArmorDetector* self)
+{
+  XR_LOG_INFO("ArmorDetector shared image worker starting: topic=%s",
+              SharedImageTopicName());
+
+  bool attach_logged = false;
+  while (true)
+  {
+    SharedImageTopic::Subscriber subscriber(SharedImageTopicName());
+    if (!subscriber.Valid())
     {
-      cv::Mat output;
-      cv::cvtColor(input, output, cv::COLOR_RGB2BGR);
-      return output;
+      if (!attach_logged)
+      {
+        XR_LOG_WARN("ArmorDetector waiting for shared image topic: %s",
+                    SharedImageTopicName());
+        attach_logged = true;
+      }
+      LibXR::Thread::Sleep(200);
+      continue;
     }
-    case CameraBase::Encoding::BGRA8:
+
+    XR_LOG_PASS("ArmorDetector attached shared image topic: %s",
+                SharedImageTopicName());
+    attach_logged = false;
+
+    SharedImageTopic::Data recv_data;
+    while (true)
     {
-      cv::Mat output;
-      cv::cvtColor(input, output, cv::COLOR_BGRA2BGR);
-      return output;
+      const auto wait_ans = subscriber.Wait(recv_data, SHARED_IMAGE_WAIT_TIMEOUT_MS);
+      if (wait_ans == LibXR::ErrorCode::TIMEOUT)
+      {
+        continue;
+      }
+      if (wait_ans != LibXR::ErrorCode::OK)
+      {
+        XR_LOG_WARN("ArmorDetector shared image wait failed (err=%d), retrying attach.",
+                    static_cast<int>(wait_ans));
+        recv_data.Reset();
+        break;
+      }
+
+      const CameraBase::SharedImageFrame* frame = recv_data.GetData();
+      if (frame != nullptr)
+      {
+        self->ProcessSharedImageFrame(*frame);
+      }
+      recv_data.Reset();
     }
-    case CameraBase::Encoding::RGBA8:
-    {
-      cv::Mat output;
-      cv::cvtColor(input, output, cv::COLOR_RGBA2BGR);
-      return output;
-    }
-    default:
-      return input;
   }
 }
 

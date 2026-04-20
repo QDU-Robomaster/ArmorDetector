@@ -146,10 +146,10 @@ class ArmorDetector : public LibXR::Application
     bool duplicated{false};
   };
 
-  void ImageCallback(cv::Mat* img_msg);
-  void HeaderCallback(CameraBase::ImageHeader* image_header);
+  void ProcessImage(const cv::Mat& img_msg, uint64_t image_timestamp_us);
+  void ProcessSharedImageFrame(const CameraBase::SharedImageFrame& frame);
+  static void SharedImageThreadFun(ArmorDetector* self);
 
-  cv::Mat ConvertToBgr(const cv::Mat& input) const;
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img, cv::Mat* binary_debug);
   std::vector<CandidateArmor> Parse(double scale, cv::Mat& output,
                                     const cv::Mat& bgr_img);
@@ -178,6 +178,7 @@ class ArmorDetector : public LibXR::Application
   std::unique_ptr<PnPSolver> pnp_solver_{};
   uint64_t latest_timestamp_us_{0};
   uint64_t frame_index_{0};
+  LibXR::Thread shared_image_thread_{};
   uint32_t refined_count_{0};
   uint32_t discarded_count_{0};
   bool model_ready_{false};
