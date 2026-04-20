@@ -216,19 +216,11 @@ LibXR::Transform<double> make_pose(const cv::Mat& rvec, const cv::Mat& tvec)
 }  // namespace
 
 ArmorDetector::ArmorDetector(LibXR::HardwareContainer&, LibXR::ApplicationManager& app,
-                             Config cfg)
+                             Config cfg, CameraBase::CameraInfo camera_info)
+    : camera_info_(std::move(camera_info))
 {
   SetConfig(cfg);
-
-  auto info_topic = LibXR::Topic(LibXR::Topic::Find("camera_info"));
-  auto info_cb = LibXR::Topic::Callback::Create(
-      [](bool, ArmorDetector* self, LibXR::RawData& data)
-      {
-        auto* camera_info = reinterpret_cast<CameraBase::CameraInfo*>(data.addr_);
-        self->InfoCallback(camera_info);
-      },
-      this);
-  info_topic.RegisterCallback(info_cb);
+  pnp_solver_ = std::make_unique<PnPSolver>(camera_info_);
 
   auto header_topic = LibXR::Topic(LibXR::Topic::Find("image_header"));
   auto header_cb = LibXR::Topic::Callback::Create(
@@ -300,20 +292,9 @@ void ArmorDetector::HeaderCallback(CameraBase::ImageHeader* image_header)
   latest_timestamp_us_ = static_cast<uint64_t>(image_header->timestamp);
 }
 
-void ArmorDetector::InfoCallback(CameraBase::CameraInfo* camera_info)
-{
-  if (camera_info == nullptr || camera_info_ != nullptr)
-  {
-    return;
-  }
-
-  camera_info_ = std::make_shared<CameraBase::CameraInfo>(*camera_info);
-  pnp_solver_ = std::make_unique<PnPSolver>(*camera_info_);
-}
-
 void ArmorDetector::ImageCallback(cv::Mat* img_msg)
 {
-  if (img_msg == nullptr || camera_info_ == nullptr || img_msg->empty())
+  if (img_msg == nullptr || img_msg->empty())
   {
     return;
   }
@@ -366,12 +347,7 @@ void ArmorDetector::ImageCallback(cv::Mat* img_msg)
 
 cv::Mat ArmorDetector::ConvertToBgr(const cv::Mat& input) const
 {
-  if (camera_info_ == nullptr)
-  {
-    return input;
-  }
-
-  switch (camera_info_->encoding)
+  switch (camera_info_.encoding)
   {
     case CameraBase::Encoding::RGB8:
     {

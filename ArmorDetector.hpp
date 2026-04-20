@@ -31,6 +31,16 @@ constructor_args:
       show_binary: false
       wait_key_ms: 1
       overlay_scale: 0.75
+  camera_info:
+    width: 1280
+    height: 720
+    step: 3840
+    encoding: CameraBase::Encoding::BGR8
+    camera_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    distortion_model: CameraBase::DistortionModel::PLUMB_BOB
+    distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
+    rectification_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    projection_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 template_args: []
 required_hardware: []
 depends:
@@ -97,7 +107,8 @@ class ArmorDetector : public LibXR::Application
     DebugParams debug{};
   };
 
-  ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg);
+  ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg,
+                CameraBase::CameraInfo camera_info);
 
   void SetConfig(const Config& cfg);
   void OnMonitor() override {}
@@ -137,7 +148,6 @@ class ArmorDetector : public LibXR::Application
 
   void ImageCallback(cv::Mat* img_msg);
   void HeaderCallback(CameraBase::ImageHeader* image_header);
-  void InfoCallback(CameraBase::CameraInfo* camera_info);
 
   cv::Mat ConvertToBgr(const cv::Mat& input) const;
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img, cv::Mat* binary_debug);
@@ -164,7 +174,7 @@ class ArmorDetector : public LibXR::Application
 
  private:
   Config cfg_{};
-  std::shared_ptr<CameraBase::CameraInfo> camera_info_{};
+  CameraBase::CameraInfo camera_info_{};
   std::unique_ptr<PnPSolver> pnp_solver_{};
   uint64_t latest_timestamp_us_{0};
   uint64_t frame_index_{0};
