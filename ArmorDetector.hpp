@@ -136,6 +136,7 @@ class ArmorDetector : public LibXR::Application
   };
 
   void ImageCallback(cv::Mat* img_msg);
+  void HeaderCallback(CameraBase::ImageHeader* image_header);
   void InfoCallback(CameraBase::CameraInfo* camera_info);
 
   cv::Mat ConvertToBgr(const cv::Mat& input) const;

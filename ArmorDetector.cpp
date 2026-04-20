@@ -230,6 +230,16 @@ ArmorDetector::ArmorDetector(LibXR::HardwareContainer&, LibXR::ApplicationManage
       this);
   info_topic.RegisterCallback(info_cb);
 
+  auto header_topic = LibXR::Topic(LibXR::Topic::Find("image_header"));
+  auto header_cb = LibXR::Topic::Callback::Create(
+      [](bool, ArmorDetector* self, LibXR::RawData& data)
+      {
+        auto* image_header = reinterpret_cast<CameraBase::ImageHeader*>(data.addr_);
+        self->HeaderCallback(image_header);
+      },
+      this);
+  header_topic.RegisterCallback(header_cb);
+
   auto image_topic = LibXR::Topic(LibXR::Topic::Find("image_raw"));
   auto image_cb = LibXR::Topic::Callback::Create(
       [](bool, ArmorDetector* self, LibXR::RawData& data)
@@ -280,14 +290,23 @@ void ArmorDetector::SetConfig(const Config& cfg)
   }
 }
 
-void ArmorDetector::InfoCallback(CameraBase::CameraInfo* camera_info)
+void ArmorDetector::HeaderCallback(CameraBase::ImageHeader* image_header)
 {
-  if (camera_info == nullptr)
+  if (image_header == nullptr)
   {
     return;
   }
 
-  latest_timestamp_us_ = camera_info->timestamp;
+  latest_timestamp_us_ = static_cast<uint64_t>(image_header->timestamp);
+}
+
+void ArmorDetector::InfoCallback(CameraBase::CameraInfo* camera_info)
+{
+  if (camera_info == nullptr || camera_info_ != nullptr)
+  {
+    return;
+  }
+
   camera_info_ = std::make_shared<CameraBase::CameraInfo>(*camera_info);
   pnp_solver_ = std::make_unique<PnPSolver>(*camera_info_);
 }
