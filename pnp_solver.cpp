@@ -6,12 +6,12 @@
 
 #include <opencv2/calib3d.hpp>
 
-PnPSolver::PnPSolver(const CameraBase::CameraInfo& camera_info)
+PnPSolver::PnPSolver(const CameraTypes::CameraInfo& camera_info)
     : camera_matrix_(cv::Mat(3, 3, CV_64F,
                              const_cast<double*>(camera_info.camera_matrix.data()))
                          .clone())
 {
-  const auto dist_coeffs = CameraBase::CameraInfo::ToPnPDistCoeffs(
+  const auto dist_coeffs = CameraTypes::CameraInfo::ToPnPDistCoeffs(
       camera_info.distortion_model, camera_info.distortion_coefficients);
   if (dist_coeffs.empty())
   {

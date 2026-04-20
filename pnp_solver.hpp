@@ -18,7 +18,7 @@ class PnPSolver
    * @brief 构造函数
    * @param camera_info 相机内参和畸变参数。
    */
-  explicit PnPSolver(const CameraBase::CameraInfo& camera_info);
+  explicit PnPSolver(const CameraTypes::CameraInfo& camera_info);
 
   /**
    * @brief 估计装甲板的三维位姿。

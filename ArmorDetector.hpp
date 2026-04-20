@@ -31,17 +31,18 @@ constructor_args:
       show_binary: false
       wait_key_ms: 1
       overlay_scale: 0.75
-  camera_info:
-    width: 1280
-    height: 720
-    step: 3840
-    encoding: CameraBase::Encoding::BGR8
-    camera_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-    distortion_model: CameraBase::DistortionModel::PLUMB_BOB
-    distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
-    rectification_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-    projection_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-template_args: []
+  image_topic_name: "image_frame"
+template_args:
+  - Info:
+      width: 1280
+      height: 720
+      step: 3840
+      encoding: CameraTypes::Encoding::BGR8
+      camera_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+      distortion_model: CameraTypes::DistortionModel::PLUMB_BOB
+      distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
+      rectification_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+      projection_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 required_hardware: []
 depends:
   - qdu-future/CameraBase
@@ -61,9 +62,16 @@ depends:
 #include "libxr.hpp"
 #include "pnp_solver.hpp"
 
+template <CameraTypes::CameraInfo CameraInfoV>
 class ArmorDetector : public LibXR::Application
 {
  public:
+  using Base = CameraBase<CameraInfoV>;
+  using CameraInfo = typename Base::CameraInfo;
+  using SharedImageFrame = typename Base::SharedImageFrame;
+
+  static inline constexpr CameraInfo kCameraInfo = CameraInfoV;
+
   struct TraditionalParams
   {
     double threshold{150.0};
@@ -108,7 +116,7 @@ class ArmorDetector : public LibXR::Application
   };
 
   ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg,
-                CameraBase::CameraInfo camera_info);
+                const char* image_topic_name = "image_frame");
 
   void SetConfig(const Config& cfg);
   void OnMonitor() override {}
@@ -147,8 +155,8 @@ class ArmorDetector : public LibXR::Application
   };
 
   void ProcessImage(const cv::Mat& img_msg, uint64_t image_timestamp_us);
-  void ProcessSharedImageFrame(const CameraBase::SharedImageFrame& frame);
-  static void SharedImageThreadFun(ArmorDetector* self);
+  void ProcessSharedImageFrame(const SharedImageFrame& frame);
+  static void SharedImageThreadFun(ArmorDetector<CameraInfoV>* self);
 
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img, cv::Mat* binary_debug);
   std::vector<CandidateArmor> Parse(double scale, cv::Mat& output,
@@ -174,8 +182,8 @@ class ArmorDetector : public LibXR::Application
 
  private:
   Config cfg_{};
-  CameraBase::CameraInfo camera_info_{};
   std::unique_ptr<PnPSolver> pnp_solver_{};
+  const char* image_topic_name_{"image_frame"};
   uint64_t latest_timestamp_us_{0};
   uint64_t frame_index_{0};
   LibXR::Thread shared_image_thread_{};
@@ -197,3 +205,5 @@ class ArmorDetector : public LibXR::Application
   LibXR::Topic metrics_topic_ =
       LibXR::Topic("metrics", sizeof(ArmorDetectorMetrics), &armor_domain_);
 };
+
+#include "ArmorDetector.inl"
