@@ -36,6 +36,7 @@ enum class ArmorNumber : uint8_t
   GUARD = 6,
   BASE = 7,
   NEGATIVE = 8,
+  UNKNOWN = NEGATIVE,
   INVALID = NEGATIVE,
 };
 
@@ -44,7 +45,8 @@ enum class ArmorPriority : uint8_t
   FIRST = 1,
   SECOND = 2,
   THIRD = 3,
-  FORTH = 4,
+  FOURTH = 4,
+  FORTH = FOURTH,
   FIFTH = 5,
 };
 
@@ -57,6 +59,22 @@ inline constexpr std::array<std::string_view, 3> ARMOR_TYPE_NAMES = {
 inline constexpr std::array<std::string_view, 9> ARMOR_NUMBER_NAMES = {
     "one",      "two",  "three",    "four", "five",
     "outpost",  "guard", "base",    "negative"};
+
+inline constexpr bool ArmorNumberIsLarge(ArmorNumber number)
+{
+  return number == ArmorNumber::ONE || number == ArmorNumber::BASE;
+}
+
+inline constexpr bool ArmorNumberIsSmall(ArmorNumber number)
+{
+  return number == ArmorNumber::TWO || number == ArmorNumber::GUARD ||
+         number == ArmorNumber::OUTPOST;
+}
+
+inline constexpr bool ArmorNumberIsKnown(ArmorNumber number)
+{
+  return number != ArmorNumber::UNKNOWN;
+}
 
 inline ArmorPriority GetArmorPriority(ArmorNumber number)
 {
@@ -71,7 +89,7 @@ inline ArmorPriority GetArmorPriority(ArmorNumber number)
     case ArmorNumber::GUARD:
       return ArmorPriority::THIRD;
     case ArmorNumber::TWO:
-      return ArmorPriority::FORTH;
+      return ArmorPriority::FOURTH;
     case ArmorNumber::OUTPOST:
     case ArmorNumber::BASE:
     case ArmorNumber::NEGATIVE:

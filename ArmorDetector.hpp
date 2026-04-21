@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: sp_vision yolov5 armor detector with openvino
+module_description: armor detector with openvino model, optional corner refine, and pnp
 constructor_args:
   cfg:
     detect_color: 1
@@ -52,7 +52,7 @@ depends:
 #include <cstdlib>
 #include <iomanip>
 #include <limits>
-#include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -146,6 +146,7 @@ class ArmorDetector : public LibXR::Application
 
   struct CandidateArmor
   {
+    // 经过网络解码、可选角点细化和类型判定后的内部装甲板表示。
     ArmorColor color{ArmorColor::UNKNOWN};
     ArmorType type{ArmorType::INVALID};
     ArmorNumber number{ArmorNumber::INVALID};
@@ -157,13 +158,27 @@ class ArmorDetector : public LibXR::Application
     double ratio{0.0};
   };
 
+  struct NetworkDetection
+  {
+    // 网络输出的最小语义单元，还没有经过 refine 和类型修正。
+    ArmorColor color{ArmorColor::UNKNOWN};
+    ArmorNumber number{ArmorNumber::UNKNOWN};
+    float confidence{0.0F};
+    cv::Rect box{};
+    std::array<cv::Point2f, 4> points{};
+  };
+
   void ProcessImage(const cv::Mat& img_msg, uint64_t image_timestamp_us);
   void ProcessSyncedFrame(const SyncedFrame& frame);
   static void SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self);
 
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img, cv::Mat* binary_debug);
-  std::vector<CandidateArmor> Parse(double scale, cv::Mat& output,
-                                    const cv::Mat& bgr_img);
+  std::vector<CandidateArmor> DecodeOutput(double scale, const cv::Mat& output,
+                                           const cv::Mat& bgr_img);
+  std::optional<NetworkDetection> DecodeDetection(
+      double scale, const cv::Mat& output, int row) const;
+  CandidateArmor BuildCandidateArmor(const NetworkDetection& detection,
+                                     const cv::Mat& bgr_img) const;
   bool RefineArmorCorners(CandidateArmor& armor, const cv::Mat& bgr_img) const;
   std::vector<Lightbar> DetectLightbars(const cv::Mat& bgr_img,
                                         const cv::Mat& binary_img) const;
@@ -183,7 +198,7 @@ class ArmorDetector : public LibXR::Application
  private:
   Config cfg_{};
   Sync& sync_;
-  std::unique_ptr<PnPSolver> pnp_solver_{};
+  PnPSolver<CameraInfoV> pnp_solver_{};
   uint64_t latest_timestamp_us_{0};
   uint64_t frame_index_{0};
   LibXR::Thread sync_frame_thread_{};
@@ -195,6 +210,7 @@ class ArmorDetector : public LibXR::Application
 
   ov::Core ov_core_{};
   ov::CompiledModel compiled_model_{};
+  ov::InferRequest infer_request_{};
 
   ArmorDetectionsMessage armors_msg_{};
   ArmorDetectorMetrics metrics_msg_{};
@@ -206,11 +222,9 @@ class ArmorDetector : public LibXR::Application
       LibXR::Topic("metrics", sizeof(ArmorDetectorMetrics), &armor_domain_);
 };
 
-
 namespace armor_detector_detail
 {
-// Sync-frame transport and debug-preview helpers live here so the
-// detector template body stays focused on the pipeline itself.
+// 只保留与模块主体无关的低层工具，避免 detector 主逻辑里充满魔法数字和绘图细节。
 constexpr double deg2rad = CV_PI / 180.0;
 constexpr int yolo_input_size = 640;
 constexpr int info_panel_width = 360;
@@ -222,6 +236,15 @@ constexpr uint32_t sync_frame_wait_timeout_ms = 100;
 constexpr uint32_t sync_frame_retry_sleep_ms = 200;
 constexpr uint32_t metrics_log_period = 30;
 constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
+
+struct OutputLayout
+{
+  static constexpr int objectness_index = 8;
+  static constexpr int color_begin = 9;
+  static constexpr int color_end = 13;
+  static constexpr int number_begin = 13;
+  static constexpr int number_end = 22;
+};
 
 inline int CvTypeFromEncoding(CameraTypes::Encoding encoding)
 {
@@ -319,25 +342,23 @@ inline ArmorNumber number_from_yolo_id(int number_id)
     case 7:
       return ArmorNumber::BASE;
     default:
-      return ArmorNumber::NEGATIVE;
+      return ArmorNumber::UNKNOWN;
   }
 }
 
-inline void sort_keypoints(std::vector<cv::Point2f>& keypoints)
+inline std::array<cv::Point2f, 4> sort_keypoints(
+    const std::array<cv::Point2f, 4>& keypoints)
 {
-  if (keypoints.size() != 4U)
-  {
-    return;
-  }
+  std::array<cv::Point2f, 4> sorted = keypoints;
 
-  std::sort(keypoints.begin(), keypoints.end(),
+  std::sort(sorted.begin(), sorted.end(),
             [](const cv::Point2f& lhs, const cv::Point2f& rhs)
             {
               return lhs.y < rhs.y;
             });
 
-  std::array<cv::Point2f, 2> top_points = {keypoints[0], keypoints[1]};
-  std::array<cv::Point2f, 2> bottom_points = {keypoints[2], keypoints[3]};
+  std::array<cv::Point2f, 2> top_points = {sorted[0], sorted[1]};
+  std::array<cv::Point2f, 2> bottom_points = {sorted[2], sorted[3]};
   std::sort(top_points.begin(), top_points.end(),
             [](const cv::Point2f& lhs, const cv::Point2f& rhs)
             {
@@ -349,10 +370,7 @@ inline void sort_keypoints(std::vector<cv::Point2f>& keypoints)
               return lhs.x < rhs.x;
             });
 
-  keypoints[0] = top_points[0];
-  keypoints[1] = top_points[1];
-  keypoints[2] = bottom_points[1];
-  keypoints[3] = bottom_points[0];
+  return {top_points[0], top_points[1], bottom_points[1], bottom_points[0]};
 }
 
 inline std::string armor_number_to_string(ArmorNumber number)
@@ -461,6 +479,26 @@ inline cv::Point2f quad_center(const std::array<cv::Point2f, 4>& points)
   return (points[0] + points[1] + points[2] + points[3]) * 0.25F;
 }
 
+inline cv::Rect bounding_rect_from_points(
+    const std::array<cv::Point2f, 4>& points)
+{
+  float min_x = points[0].x;
+  float max_x = points[0].x;
+  float min_y = points[0].y;
+  float max_y = points[0].y;
+  for (const auto& point : points)
+  {
+    min_x = std::min(min_x, point.x);
+    max_x = std::max(max_x, point.x);
+    min_y = std::min(min_y, point.y);
+    max_y = std::max(max_y, point.y);
+  }
+
+  return {static_cast<int>(min_x), static_cast<int>(min_y),
+          std::max(1, static_cast<int>(max_x - min_x)),
+          std::max(1, static_cast<int>(max_y - min_y))};
+}
+
 inline const char* target_color_name(ArmorColor color)
 {
   if (color == ArmorColor::BLUE)
@@ -490,7 +528,6 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
     : sync_(sync)
 {
   SetConfig(cfg);
-  pnp_solver_ = std::make_unique<PnPSolver>(kCameraInfo);
 
   sync_frame_thread_.Create(this, SyncFrameThreadFun, "ArmorDetSync",
                             detail::sync_frame_thread_stack_size,
@@ -509,7 +546,7 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
 
   try
   {
-    auto model = ov_core_.read_model(YOLOV5_MODEL_PATH);
+    auto model = ov_core_.read_model(ARMOR_DETECTOR_MODEL_PATH);
     ov::preprocess::PrePostProcessor post_processor(model);
     auto& input = post_processor.input();
 
@@ -529,12 +566,14 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
     compiled_model_ = ov_core_.compile_model(
         model, "CPU",
         ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+    infer_request_ = compiled_model_.create_infer_request();
     model_ready_ = true;
   }
   catch (const std::exception& exception)
   {
     XR_LOG_ERROR("ArmorDetector failed to load YOLOv5 model: %s", exception.what());
     compiled_model_ = ov::CompiledModel();
+    infer_request_ = ov::InferRequest();
   }
 }
 
@@ -690,6 +729,7 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img,
   cv::Point2f offset(0.0F, 0.0F);
   cv::Rect clipped_roi(0, 0, raw_img.cols, raw_img.rows);
 
+  // 1. 根据配置裁剪出真正送入网络的图像区域。
   if (cfg_.yolo.use_roi)
   {
     int roi_width = cfg_.yolo.roi_width;
@@ -717,6 +757,7 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img,
                          static_cast<float>(clipped_roi.y));
   }
 
+  // 2. 仅在调试预览时构造二值化图，避免把传统细化的调试逻辑散落到主链路里。
   if (binary_debug != nullptr)
   {
     cv::Mat gray_img;
@@ -746,6 +787,7 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img,
   const int resized_width =
       std::max(1, static_cast<int>(std::round(detector_img.cols * scale)));
 
+  // 3. letterbox 到固定输入尺寸，并复用持久化 infer request。
   cv::Mat input(detail::yolo_input_size, detail::yolo_input_size, CV_8UC3,
                 cv::Scalar(0, 0, 0));
   cv::resize(detector_img,
@@ -757,16 +799,20 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img,
       ov::Shape{1, static_cast<size_t>(detail::yolo_input_size),
                 static_cast<size_t>(detail::yolo_input_size), 3},
       input.data);
-  auto infer_request = compiled_model_.create_infer_request();
-  infer_request.set_input_tensor(input_tensor);
-  infer_request.infer();
+  infer_request_.set_input_tensor(input_tensor);
+  infer_request_.infer();
 
-  auto output_tensor = infer_request.get_output_tensor();
+  auto output_tensor = infer_request_.get_output_tensor();
   const auto output_shape = output_tensor.get_shape();
   cv::Mat output(static_cast<int>(output_shape[1]), static_cast<int>(output_shape[2]),
                  CV_32F, output_tensor.data<float>());
-  auto armors = Parse(scale, output, detector_img);
+  auto armors = DecodeOutput(scale, output, detector_img);
+  if (armors.empty())
+  {
+    return armors;
+  }
 
+  // 4. 如果网络只看了 ROI，这里再把检测结果平移回整幅原图坐标系。
   if (cfg_.yolo.use_roi)
   {
     for (auto& armor : armors)
@@ -786,58 +832,36 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img,
 }
 
 template <CameraTypes::CameraInfo CameraInfoV>
-std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor> ArmorDetector<CameraInfoV>::Parse(
-    double scale, cv::Mat& output, const cv::Mat& bgr_img)
+std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
+ArmorDetector<CameraInfoV>::DecodeOutput(double scale, const cv::Mat& output,
+                                         const cv::Mat& bgr_img)
 {
-  std::vector<int> color_ids;
-  std::vector<int> number_ids;
-  std::vector<float> confidences;
-  std::vector<cv::Rect> boxes;
-  std::vector<std::vector<cv::Point2f>> armor_key_points;
-
+  std::vector<NetworkDetection> detections;
   const ArmorColor target_color = detail::detect_color_from_config(cfg_.detect_color);
 
   for (int row = 0; row < output.rows; ++row)
   {
-    double score = output.at<float>(row, 8);
-    score = 1.0 / (1.0 + std::exp(-score));
-    if (score < cfg_.yolo.score_threshold)
+    const auto detection = DecodeDetection(scale, output, row);
+    if (!detection.has_value())
     {
       continue;
     }
 
-    cv::Mat color_scores = output.row(row).colRange(9, 13);
-    cv::Mat number_scores = output.row(row).colRange(13, 22);
-    cv::Point color_id_point;
-    cv::Point number_id_point;
-    cv::minMaxLoc(color_scores, nullptr, nullptr, nullptr, &color_id_point);
-    cv::minMaxLoc(number_scores, nullptr, nullptr, nullptr, &number_id_point);
+    detections.emplace_back(*detection);
+  }
 
-    std::vector<cv::Point2f> keypoints = {
-        cv::Point2f(output.at<float>(row, 0) / scale, output.at<float>(row, 1) / scale),
-        cv::Point2f(output.at<float>(row, 6) / scale, output.at<float>(row, 7) / scale),
-        cv::Point2f(output.at<float>(row, 4) / scale, output.at<float>(row, 5) / scale),
-        cv::Point2f(output.at<float>(row, 2) / scale, output.at<float>(row, 3) / scale)};
-
-    float min_x = keypoints[0].x;
-    float max_x = keypoints[0].x;
-    float min_y = keypoints[0].y;
-    float max_y = keypoints[0].y;
-    for (const auto& point : keypoints)
-    {
-      min_x = std::min(min_x, point.x);
-      max_x = std::max(max_x, point.x);
-      min_y = std::min(min_y, point.y);
-      max_y = std::max(max_y, point.y);
-    }
-
-    color_ids.emplace_back(color_id_point.x);
-    number_ids.emplace_back(number_id_point.x);
-    confidences.emplace_back(static_cast<float>(score));
-    boxes.emplace_back(static_cast<int>(min_x), static_cast<int>(min_y),
-                       std::max(1, static_cast<int>(max_x - min_x)),
-                       std::max(1, static_cast<int>(max_y - min_y)));
-    armor_key_points.emplace_back(std::move(keypoints));
+  std::vector<cv::Rect> boxes;
+  std::vector<float> confidences;
+  boxes.reserve(detections.size());
+  confidences.reserve(detections.size());
+  for (const auto& detection : detections)
+  {
+    boxes.emplace_back(detection.box);
+    confidences.emplace_back(detection.confidence);
+  }
+  if (boxes.empty())
+  {
+    return {};
   }
 
   std::vector<int> indices;
@@ -849,23 +873,12 @@ std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor> ArmorDetector<C
 
   for (const int index : indices)
   {
-    CandidateArmor armor;
-    armor.color = detail::color_from_yolo_id(color_ids[index]);
-    armor.number = detail::number_from_yolo_id(number_ids[index]);
-    armor.confidence = confidences[index];
-    armor.box = boxes[index];
-
-    auto keypoints = armor_key_points[index];
-    detail::sort_keypoints(keypoints);
-    std::copy(keypoints.begin(), keypoints.end(), armor.points.begin());
-    armor.center = detail::quad_center(armor.points);
-    armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
-    UpdateGeometryMetrics(armor);
+    CandidateArmor armor = BuildCandidateArmor(detections[index], bgr_img);
 
     const bool color_mismatch =
         (target_color != ArmorColor::UNKNOWN) && (armor.color != target_color);
     if (color_mismatch ||
-        armor.number == ArmorNumber::NEGATIVE ||
+        !ArmorNumberIsKnown(armor.number) ||
         armor.confidence < static_cast<float>(cfg_.yolo.min_confidence))
     {
       ++discarded_count_;
@@ -880,13 +893,11 @@ std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor> ArmorDetector<C
       }
     }
 
-    if (armor.number == ArmorNumber::ONE || armor.number == ArmorNumber::BASE)
+    if (ArmorNumberIsLarge(armor.number))
     {
       armor.type = ArmorType::LARGE;
     }
-    else if (armor.number == ArmorNumber::TWO ||
-             armor.number == ArmorNumber::GUARD ||
-             armor.number == ArmorNumber::OUTPOST)
+    else if (ArmorNumberIsSmall(armor.number))
     {
       armor.type = ArmorType::SMALL;
     }
@@ -904,6 +915,61 @@ std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor> ArmorDetector<C
   }
 
   return armors;
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
+ArmorDetector<CameraInfoV>::DecodeDetection(double scale, const cv::Mat& output,
+                                            int row) const
+{
+  double score = output.at<float>(row, detail::OutputLayout::objectness_index);
+  score = 1.0 / (1.0 + std::exp(-score));
+  if (score < cfg_.yolo.score_threshold)
+  {
+    return std::nullopt;
+  }
+
+  const cv::Mat color_scores =
+      output.row(row).colRange(detail::OutputLayout::color_begin,
+                               detail::OutputLayout::color_end);
+  const cv::Mat number_scores =
+      output.row(row).colRange(detail::OutputLayout::number_begin,
+                               detail::OutputLayout::number_end);
+  cv::Point color_id_point;
+  cv::Point number_id_point;
+  cv::minMaxLoc(color_scores, nullptr, nullptr, nullptr, &color_id_point);
+  cv::minMaxLoc(number_scores, nullptr, nullptr, nullptr, &number_id_point);
+
+  const std::array<cv::Point2f, 4> unsorted_points = {
+      cv::Point2f(output.at<float>(row, 0) / scale, output.at<float>(row, 1) / scale),
+      cv::Point2f(output.at<float>(row, 6) / scale, output.at<float>(row, 7) / scale),
+      cv::Point2f(output.at<float>(row, 4) / scale, output.at<float>(row, 5) / scale),
+      cv::Point2f(output.at<float>(row, 2) / scale, output.at<float>(row, 3) / scale)};
+
+  NetworkDetection detection;
+  detection.color = detail::color_from_yolo_id(color_id_point.x);
+  detection.number = detail::number_from_yolo_id(number_id_point.x);
+  detection.confidence = static_cast<float>(score);
+  detection.points = detail::sort_keypoints(unsorted_points);
+  detection.box = detail::bounding_rect_from_points(detection.points);
+  return detection;
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+typename ArmorDetector<CameraInfoV>::CandidateArmor
+ArmorDetector<CameraInfoV>::BuildCandidateArmor(
+    const NetworkDetection& detection, const cv::Mat& bgr_img) const
+{
+  CandidateArmor armor;
+  armor.color = detection.color;
+  armor.number = detection.number;
+  armor.confidence = detection.confidence;
+  armor.box = detection.box;
+  armor.points = detection.points;
+  armor.center = detail::quad_center(armor.points);
+  armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
+  UpdateGeometryMetrics(armor);
+  return armor;
 }
 
 template <CameraTypes::CameraInfo CameraInfoV>
@@ -1078,11 +1144,10 @@ bool ArmorDetector<CameraInfoV>::ValidateArmorType(const CandidateArmor& armor) 
 {
   if (armor.type == ArmorType::SMALL)
   {
-    return armor.number != ArmorNumber::ONE && armor.number != ArmorNumber::BASE;
+    return !ArmorNumberIsLarge(armor.number);
   }
 
-  return armor.number != ArmorNumber::TWO && armor.number != ArmorNumber::GUARD &&
-         armor.number != ArmorNumber::OUTPOST;
+  return !ArmorNumberIsSmall(armor.number);
 }
 
 template <CameraTypes::CameraInfo CameraInfoV>
@@ -1114,7 +1179,7 @@ ArmorType ArmorDetector<CameraInfoV>::InferArmorType(const CandidateArmor& armor
     return ArmorType::SMALL;
   }
 
-  if (armor.number == ArmorNumber::ONE || armor.number == ArmorNumber::BASE)
+  if (ArmorNumberIsLarge(armor.number))
   {
     return ArmorType::LARGE;
   }
@@ -1151,8 +1216,6 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
   armors_msg_.image_timestamp_us = latest_timestamp_us_;
   armors_msg_.results.clear();
   armors_msg_.results.reserve(armors.size());
-  const cv::Point2f image_center(static_cast<float>(bgr_img.cols) * 0.5F,
-                                 static_cast<float>(bgr_img.rows) * 0.5F);
 
   for (const auto& armor : armors)
   {
@@ -1166,16 +1229,13 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
     result.points = armor.points;
     result.center = armor.center;
     result.center_norm = GetNormalizedCenter(bgr_img, armor.center);
-    result.distance_to_image_center = cv::norm(armor.center - image_center);
+    result.distance_to_image_center = pnp_solver_.CalculateDistanceToCenter(armor.center);
 
-    if (pnp_solver_ != nullptr)
+    cv::Mat rvec;
+    cv::Mat tvec;
+    if (pnp_solver_.SolvePnP(armor.points, armor.type, rvec, tvec))
     {
-      cv::Mat rvec;
-      cv::Mat tvec;
-      if (pnp_solver_->SolvePnP(armor.points, armor.type, rvec, tvec))
-      {
-        result.pose = detail::make_pose(rvec, tvec);
-      }
+      result.pose = detail::make_pose(rvec, tvec);
     }
 
     armors_msg_.results.emplace_back(std::move(result));

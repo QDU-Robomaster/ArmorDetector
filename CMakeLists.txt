@@ -2,15 +2,6 @@
 
 target_include_directories(xr PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
-file(GLOB MODULE_ArmorDetector_SRC CONFIGURE_DEPENDS
-  "${CMAKE_CURRENT_LIST_DIR}/*.cpp"
-  "${CMAKE_CURRENT_LIST_DIR}/*.cxx"
-  "${CMAKE_CURRENT_LIST_DIR}/*.cc"
-  "${CMAKE_CURRENT_LIST_DIR}/*.c"
-)
-
-target_sources(xr PRIVATE ${MODULE_ArmorDetector_SRC})
-
 get_filename_component(_MODULE_DIRNAME ${CMAKE_CURRENT_LIST_DIR} NAME)
 set(_DEPS_TARGET "${_MODULE_DIRNAME}_deps")
 add_library(${_DEPS_TARGET} INTERFACE)
@@ -41,8 +32,7 @@ target_link_libraries(${_DEPS_TARGET} INTERFACE
 
 target_compile_definitions(${_DEPS_TARGET} INTERFACE
   OV_THREAD=OV_THREAD_TBB
-  DETECTOR_MODEL_PATH="${CMAKE_CURRENT_LIST_DIR}/model/mlp.onnx"
-  YOLOV5_MODEL_PATH="${CMAKE_CURRENT_LIST_DIR}/model/yolov5.xml"
+  ARMOR_DETECTOR_MODEL_PATH="${CMAKE_CURRENT_LIST_DIR}/model/yolov5.xml"
 )
 
 set_property(GLOBAL APPEND PROPERTY XR_MODULE_DEPS ${_DEPS_TARGET})
