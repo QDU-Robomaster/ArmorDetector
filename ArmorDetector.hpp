@@ -27,7 +27,7 @@ constructor_args:
       show_binary: false
       wait_key_ms: 1
       overlay_scale: 0.75
-  frame_topic_name: "camera_frame_sync"
+  sync: @camera_frame_sync
 template_args:
   - Info:
       width: 1280
@@ -69,7 +69,6 @@ depends:
 #include "app_framework.hpp"
 #include "armor.hpp"
 #include "libxr.hpp"
-#include "linux_shared_topic.hpp"
 #include "logger.hpp"
 #include "pnp_solver.hpp"
 
@@ -79,7 +78,7 @@ class ArmorDetector : public LibXR::Application
  public:
   using Sync = CameraFrameSync<CameraInfoV>;
   using CameraInfo = typename Sync::CameraInfo;
-  using Frame = typename Sync::Frame;
+  using SyncedFrame = typename Sync::SyncedFrame;
 
   static inline constexpr CameraInfo kCameraInfo = CameraInfoV;
 
@@ -123,7 +122,7 @@ class ArmorDetector : public LibXR::Application
   };
 
   ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg,
-                const char* frame_topic_name = "camera_frame_sync");
+                Sync& sync);
 
   void SetConfig(const Config& cfg);
   void OnMonitor() override {}
@@ -159,7 +158,7 @@ class ArmorDetector : public LibXR::Application
   };
 
   void ProcessImage(const cv::Mat& img_msg, uint64_t image_timestamp_us);
-  void ProcessSyncedFrame(const Frame& frame);
+  void ProcessSyncedFrame(const SyncedFrame& frame);
   static void SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self);
 
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img, cv::Mat* binary_debug);
@@ -183,8 +182,8 @@ class ArmorDetector : public LibXR::Application
 
  private:
   Config cfg_{};
+  Sync& sync_;
   std::unique_ptr<PnPSolver> pnp_solver_{};
-  const char* frame_topic_name_{"camera_frame_sync"};
   uint64_t latest_timestamp_us_{0};
   uint64_t frame_index_{0};
   LibXR::Thread sync_frame_thread_{};
@@ -223,10 +222,6 @@ constexpr uint32_t sync_frame_wait_timeout_ms = 100;
 constexpr uint32_t sync_frame_retry_sleep_ms = 200;
 constexpr uint32_t metrics_log_period = 30;
 constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
-
-template <CameraTypes::CameraInfo CameraInfoV>
-using SyncFrameTopic =
-    LibXR::LinuxSharedTopic<typename CameraFrameSync<CameraInfoV>::Frame>;
 
 inline int CvTypeFromEncoding(CameraTypes::Encoding encoding)
 {
@@ -491,8 +486,8 @@ template <CameraTypes::CameraInfo CameraInfoV>
 ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
                                           LibXR::ApplicationManager& app,
                                           Config cfg,
-                                          const char* frame_topic_name)
-    : frame_topic_name_(frame_topic_name)
+                                          Sync& sync)
+    : sync_(sync)
 {
   SetConfig(cfg);
   pnp_solver_ = std::make_unique<PnPSolver>(kCameraInfo);
@@ -601,8 +596,15 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
 }
 
 template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const Frame& frame)
+void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_frame)
 {
+  const auto* image_frame = synced_frame.GetImageFrame();
+  if (image_frame == nullptr)
+  {
+    XR_LOG_ERROR("ArmorDetector received null synced image");
+    return;
+  }
+
   const int cv_type = detail::CvTypeFromEncoding(kCameraInfo.encoding);
   if (cv_type < 0)
   {
@@ -612,7 +614,7 @@ void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const Frame& frame)
   }
 
   cv::Mat img(static_cast<int>(kCameraInfo.height), static_cast<int>(kCameraInfo.width),
-              cv_type, const_cast<uint8_t*>(frame.data.data()),
+              cv_type, const_cast<uint8_t*>(image_frame->data.data()),
               static_cast<size_t>(kCameraInfo.step));
   const cv::Mat bgr_img =
       detail::ConvertToBgrWithEncoding(img, kCameraInfo.encoding);
@@ -620,60 +622,52 @@ void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const Frame& frame)
   {
     return;
   }
-  ProcessImage(bgr_img, frame.timestamp_us);
+  ProcessImage(bgr_img, image_frame->timestamp_us);
 }
 
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self)
 {
-  using SyncFrameTopicT = detail::SyncFrameTopic<CameraInfoV>;
-
-  XR_LOG_INFO("ArmorDetector sync-frame worker starting: topic=%s",
-              self->frame_topic_name_);
+  XR_LOG_INFO("ArmorDetector sync worker starting: image=%s imu=%s",
+              self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
 
   bool attach_logged = false;
   while (true)
   {
-    typename SyncFrameTopicT::Subscriber subscriber(self->frame_topic_name_);
+    typename Sync::Subscriber subscriber(self->sync_);
     if (!subscriber.Valid())
     {
       if (!attach_logged)
       {
-        XR_LOG_WARN("ArmorDetector waiting for sync frame topic: %s",
-                    self->frame_topic_name_);
+        XR_LOG_WARN("ArmorDetector waiting for sync image topic: %s",
+                    self->sync_.ImageTopicName());
         attach_logged = true;
       }
       LibXR::Thread::Sleep(detail::sync_frame_retry_sleep_ms);
       continue;
     }
 
-    XR_LOG_PASS("ArmorDetector attached sync frame topic: %s",
-                self->frame_topic_name_);
+    XR_LOG_PASS("ArmorDetector attached sync stream: image=%s imu=%s",
+                self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
     attach_logged = false;
 
-    typename SyncFrameTopicT::Data recv_data;
+    SyncedFrame synced_frame;
     while (true)
     {
       const auto wait_ans =
-          subscriber.Wait(recv_data, detail::sync_frame_wait_timeout_ms);
+          subscriber.Wait(synced_frame, detail::sync_frame_wait_timeout_ms);
       if (wait_ans == LibXR::ErrorCode::TIMEOUT)
       {
         continue;
       }
       if (wait_ans != LibXR::ErrorCode::OK)
       {
-        XR_LOG_WARN("ArmorDetector sync frame wait failed (err=%d), retrying attach.",
+        XR_LOG_WARN("ArmorDetector sync wait failed (err=%d), retrying attach.",
                     static_cast<int>(wait_ans));
-        recv_data.Reset();
         break;
       }
 
-      const Frame* frame = recv_data.GetData();
-      if (frame != nullptr)
-      {
-        self->ProcessSyncedFrame(*frame);
-      }
-      recv_data.Reset();
+      self->ProcessSyncedFrame(synced_frame);
     }
   }
 }
