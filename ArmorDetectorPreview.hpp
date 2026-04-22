@@ -7,12 +7,17 @@ void ArmorDetector<CameraInfoV>::ShowDebugPreview(const cv::Mat& bgr_img,
 {
   try
   {
-    cv::Mat canvas(bgr_img.rows, bgr_img.cols + detail::info_panel_width, CV_8UC3,
+    // Preview overlays must not mutate the detector working frame or the
+    // shared sync image behind it.
+    const cv::Mat preview_bgr = bgr_img.clone();
+
+    cv::Mat canvas(preview_bgr.rows, preview_bgr.cols + detail::info_panel_width, CV_8UC3,
                    cv::Scalar(18, 22, 28));
-    bgr_img.copyTo(canvas(cv::Rect(0, 0, bgr_img.cols, bgr_img.rows)));
+    preview_bgr.copyTo(
+        canvas(cv::Rect(0, 0, preview_bgr.cols, preview_bgr.rows)));
 
     cv::Mat header =
-        canvas(cv::Rect(0, 0, bgr_img.cols, detail::preview_header_height));
+        canvas(cv::Rect(0, 0, preview_bgr.cols, detail::preview_header_height));
     cv::Mat header_overlay = header.clone();
     cv::rectangle(header_overlay, cv::Rect(0, 0, header.cols, header.rows),
                   cv::Scalar(10, 16, 22), cv::FILLED);
@@ -60,7 +65,7 @@ void ArmorDetector<CameraInfoV>::ShowDebugPreview(const cv::Mat& bgr_img,
       detail::draw_label_chip(canvas, label.str(), label_origin, armor_color);
     }
 
-    const int panel_x = bgr_img.cols + 18;
+    const int panel_x = preview_bgr.cols + 18;
     int panel_y = 42;
     cv::putText(canvas, "Frame Stats", cv::Point(panel_x, panel_y),
                 cv::FONT_HERSHEY_DUPLEX, 0.72, cv::Scalar(243, 246, 250), 1,
@@ -167,7 +172,8 @@ void ArmorDetector<CameraInfoV>::ShowDebugPreview(const cv::Mat& bgr_img,
       cv::Mat thumb_resized;
       cv::resize(preview_binary, thumb_resized, cv::Size(thumb_width, thumb_height));
 
-      int thumb_y = std::max(bgr_img.rows - thumb_resized.rows - 26, panel_y + 16);
+      int thumb_y =
+          std::max(preview_bgr.rows - thumb_resized.rows - 26, panel_y + 16);
       if ((thumb_y + thumb_resized.rows) > canvas.rows)
       {
         thumb_y = canvas.rows - thumb_resized.rows - 16;
