@@ -27,7 +27,7 @@ constructor_args:
       show_binary: false
       wait_key_ms: 1
       overlay_scale: 0.75
-  sync: @camera_frame_sync
+  sync: '@camera_frame_sync'
 template_args:
   - Info:
       width: 1280
@@ -202,11 +202,20 @@ class ArmorDetector : public LibXR::Application
   uint64_t latest_timestamp_us_{0};
   uint64_t frame_index_{0};
   LibXR::Thread sync_frame_thread_{};
+  uint32_t decoded_count_{0};
+  uint32_t nms_count_{0};
+  uint32_t semantic_kept_count_{0};
+  uint32_t pnp_success_count_{0};
   uint32_t refined_count_{0};
   uint32_t discarded_count_{0};
+  uint32_t semantic_discard_count_{0};
+  uint32_t type_discard_count_{0};
+  double max_objectness_{0.0};
   bool model_ready_{false};
   bool preview_available_{true};
   bool preview_warned_{false};
+  bool audit_every_frame_{false};
+  bool audit_zero_frames_{false};
 
   ov::Core ov_core_{};
   ov::CompiledModel compiled_model_{};
