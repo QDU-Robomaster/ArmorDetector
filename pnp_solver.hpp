@@ -1,56 +1,261 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
-#include <opencv2/core.hpp>
+#include <cmath>
+#include <limits>
 #include <vector>
+
+#include <opencv2/calib3d.hpp>
+#include <opencv2/core.hpp>
 
 #include "CameraBase.hpp"
 #include "armor.hpp"
 
-/**
- * @class PnPSolver
- * @brief 使用 SolvePnP 估计装甲板在相机坐标系下的位姿。
- */
+template <CameraTypes::CameraInfo CameraInfoV>
 class PnPSolver
 {
  public:
-  /**
-   * @brief 构造函数
-   * @param camera_info 相机内参和畸变参数。
-   */
-  explicit PnPSolver(const CameraBase::CameraInfo& camera_info);
+  using CameraInfo = CameraTypes::CameraInfo;
 
-  /**
-   * @brief 估计装甲板的三维位姿。
-   * @param image_armor_points 输入图像四角点，顺序为左上、右上、右下、左下。
-   * @param armor_type 装甲板类型。
-   * @param rvec 输出旋转向量 (Rodrigues)，从模型坐标到相机坐标。
-   * @param tvec 输出平移向量 (米)，从模型原点到相机原点。
-   * @return true 计算成功。
-   * @return false 计算失败（如点退化）。
-   */
+  static inline constexpr CameraInfo camera_info = CameraInfoV;
+
+  PnPSolver();
+
   [[nodiscard]] bool SolvePnP(const std::array<cv::Point2f, 4>& image_armor_points,
                               ArmorType armor_type, cv::Mat& rvec,
                               cv::Mat& tvec) const;
 
-  /**
-   * @brief 计算图像点到图像中心（主点）的像素距离。
-   * @param image_point 输入图像点（像素坐标）。
-   * @return 到主点 (cx, cy) 的像素距离。
-   */
-  [[nodiscard]] double CalculateDistanceToCenter(const cv::Point2f& image_point);
+  [[nodiscard]] double CalculateDistanceToCenter(
+      const cv::Point2f& image_point) const;
 
  private:
-  cv::Mat camera_matrix_;  ///< 相机内参矩阵 (3x3, CV_64F)
-  cv::Mat dist_coeffs_;    ///< 相机畸变参数 (1x5, CV_64F)
+  [[nodiscard]] static double ComputeReprojectionError(
+      const std::vector<cv::Point3f>& object_points,
+      const std::vector<cv::Point2f>& image_points, const cv::Mat& camera_matrix,
+      const cv::Mat& dist_coeffs, const cv::Mat& rvec, const cv::Mat& tvec);
+  static cv::Mat BuildCameraMatrix();
+  static cv::Mat BuildDistCoeffs();
+  static std::vector<cv::Point3f> BuildArmorPoints(double width_mm,
+                                                   double height_mm);
 
-  // 装甲板尺寸（毫米）
-  inline static constexpr float SMALL_ARMOR_WIDTH = 135.f;
-  inline static constexpr float SMALL_ARMOR_HEIGHT = 55.f;
-  inline static constexpr float LARGE_ARMOR_WIDTH = 225.f;
-  inline static constexpr float LARGE_ARMOR_HEIGHT = 55.f;
-
-  // 装甲板四个角点（单位：米），按顺时针顺序排列
+ private:
+  cv::Mat camera_matrix_;
+  cv::Mat dist_coeffs_;
   std::vector<cv::Point3f> small_armor_points_;
   std::vector<cv::Point3f> large_armor_points_;
+
+  inline static constexpr double small_armor_width_mm = 135.0;
+  inline static constexpr double small_armor_height_mm = 56.0;
+  inline static constexpr double large_armor_width_mm = 225.0;
+  inline static constexpr double large_armor_height_mm = 56.0;
 };
+
+template <CameraTypes::CameraInfo CameraInfoV>
+PnPSolver<CameraInfoV>::PnPSolver()
+    : camera_matrix_(BuildCameraMatrix()),
+      dist_coeffs_(BuildDistCoeffs()),
+      small_armor_points_(
+          BuildArmorPoints(small_armor_width_mm, small_armor_height_mm)),
+      large_armor_points_(
+          BuildArmorPoints(large_armor_width_mm, large_armor_height_mm))
+{
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+cv::Mat PnPSolver<CameraInfoV>::BuildCameraMatrix()
+{
+  return cv::Mat(3, 3, CV_64F,
+                 const_cast<double*>(camera_info.camera_matrix.data()))
+      .clone();
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+cv::Mat PnPSolver<CameraInfoV>::BuildDistCoeffs()
+{
+  const auto dist_coeffs = CameraTypes::CameraInfo::ToPnPDistCoeffs(
+      camera_info.distortion_model, camera_info.distortion_coefficients);
+  if (dist_coeffs.empty())
+  {
+    return {};
+  }
+
+  return cv::Mat(1, static_cast<int>(dist_coeffs.size()), CV_64F,
+                 const_cast<double*>(dist_coeffs.data()))
+      .clone();
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_mm,
+                                                                  double height_mm)
+{
+  const double half_width_m = width_mm * 0.5 / 1000.0;
+  const double half_height_m = height_mm * 0.5 / 1000.0;
+
+  return {
+      {0.0f, static_cast<float>(half_width_m), static_cast<float>(-half_height_m)},
+      {0.0f, static_cast<float>(half_width_m), static_cast<float>(half_height_m)},
+      {0.0f, static_cast<float>(-half_width_m), static_cast<float>(half_height_m)},
+      {0.0f, static_cast<float>(-half_width_m), static_cast<float>(-half_height_m)}};
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+bool PnPSolver<CameraInfoV>::SolvePnP(
+    const std::array<cv::Point2f, 4>& image_armor_points, ArmorType armor_type,
+    cv::Mat& rvec, cv::Mat& tvec) const
+{
+  const std::array<cv::Point2f, 4> base_points = {
+      image_armor_points[3], image_armor_points[0], image_armor_points[1],
+      image_armor_points[2]};
+
+  const auto& object_points =
+      (armor_type == ArmorType::SMALL) ? small_armor_points_ : large_armor_points_;
+  constexpr std::array<int, 2> methods = {
+      cv::SOLVEPNP_ITERATIVE,
+      cv::SOLVEPNP_EPNP,
+  };
+  bool found = false;
+  double best_error = std::numeric_limits<double>::infinity();
+  const std::vector<cv::Point2f> image_points = {
+      base_points[0], base_points[1], base_points[2], base_points[3]};
+
+  {
+    std::vector<cv::Mat> candidate_rvecs;
+    std::vector<cv::Mat> candidate_tvecs;
+    if (cv::solvePnPGeneric(object_points, image_points, camera_matrix_, dist_coeffs_,
+                            candidate_rvecs, candidate_tvecs, false,
+                            cv::SOLVEPNP_IPPE) > 0)
+    {
+      for (std::size_t candidate_index = 0;
+           candidate_index < candidate_rvecs.size() &&
+           candidate_index < candidate_tvecs.size();
+           ++candidate_index)
+      {
+        const auto& candidate_rvec = candidate_rvecs[candidate_index];
+        const auto& candidate_tvec = candidate_tvecs[candidate_index];
+        if (candidate_rvec.empty() || candidate_tvec.empty())
+        {
+          continue;
+        }
+
+        const double z = candidate_tvec.at<double>(2);
+        if (!std::isfinite(z) || z <= 1e-6)
+        {
+          continue;
+        }
+
+        const double reprojection_error =
+            ComputeReprojectionError(object_points, image_points, camera_matrix_,
+                                     dist_coeffs_, candidate_rvec, candidate_tvec);
+        if (!std::isfinite(reprojection_error))
+        {
+          continue;
+        }
+        if (!found || reprojection_error < best_error)
+        {
+          found = true;
+          best_error = reprojection_error;
+          rvec = candidate_rvec.clone();
+          tvec = candidate_tvec.clone();
+        }
+      }
+    }
+  }
+
+  for (const int method : methods)
+  {
+    cv::Mat candidate_rvec;
+    cv::Mat candidate_tvec;
+    if (!cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
+                      candidate_rvec, candidate_tvec, false, method))
+    {
+      continue;
+    }
+
+    if (candidate_rvec.empty() || candidate_tvec.empty())
+    {
+      continue;
+    }
+
+    const double z = candidate_tvec.at<double>(2);
+    if (!std::isfinite(z) || z <= 1e-6)
+    {
+      continue;
+    }
+
+    const double reprojection_error =
+        ComputeReprojectionError(object_points, image_points, camera_matrix_,
+                                 dist_coeffs_, candidate_rvec, candidate_tvec);
+    if (!std::isfinite(reprojection_error))
+    {
+      continue;
+    }
+    if (!found || reprojection_error < best_error)
+    {
+      found = true;
+      best_error = reprojection_error;
+      rvec = candidate_rvec;
+      tvec = candidate_tvec;
+    }
+  }
+
+#if (CV_VERSION_MAJOR > 4) || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 1)
+  if (found)
+  {
+    cv::Mat refined_rvec = rvec.clone();
+    cv::Mat refined_tvec = tvec.clone();
+    try
+    {
+      cv::solvePnPRefineLM(object_points, image_points, camera_matrix_, dist_coeffs_,
+                           refined_rvec, refined_tvec);
+      const double refined_z = refined_tvec.at<double>(2);
+      const double refined_error =
+          ComputeReprojectionError(object_points, image_points, camera_matrix_,
+                                   dist_coeffs_, refined_rvec, refined_tvec);
+      if (std::isfinite(refined_z) && refined_z > 1e-6 &&
+          std::isfinite(refined_error) && refined_error <= best_error)
+      {
+        best_error = refined_error;
+        rvec = refined_rvec;
+        tvec = refined_tvec;
+      }
+    }
+    catch (const cv::Exception&)
+    {
+    }
+  }
+#endif
+
+  return found;
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+double PnPSolver<CameraInfoV>::CalculateDistanceToCenter(
+    const cv::Point2f& image_point) const
+{
+  const float cx = static_cast<float>(camera_matrix_.at<double>(0, 2));
+  const float cy = static_cast<float>(camera_matrix_.at<double>(1, 2));
+  return cv::norm(image_point - cv::Point2f(cx, cy));
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+double PnPSolver<CameraInfoV>::ComputeReprojectionError(
+    const std::vector<cv::Point3f>& object_points,
+    const std::vector<cv::Point2f>& image_points, const cv::Mat& camera_matrix,
+    const cv::Mat& dist_coeffs, const cv::Mat& rvec, const cv::Mat& tvec)
+{
+  std::vector<cv::Point2f> projected_points;
+  cv::projectPoints(object_points, rvec, tvec, camera_matrix, dist_coeffs,
+                    projected_points);
+  if (projected_points.size() != image_points.size())
+  {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  double error_sum = 0.0;
+  for (std::size_t index = 0; index < image_points.size(); ++index)
+  {
+    error_sum += cv::norm(projected_points[index] - image_points[index]);
+  }
+  return error_sum / static_cast<double>(image_points.size());
+}

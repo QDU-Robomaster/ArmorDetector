@@ -1,14 +1,35 @@
 # ArmorDetector
 
-`ArmorDetector` 现在使用 `YOLOv5 + OpenVINO` 作为主检测链路，并保留传统灯条几何筛选作为可选细化步骤。
+`ArmorDetector` 当前保持 legacy 结果话题不变，同时额外输出 tracker 专用的帧包接口。内部链路已经收敛成四阶段：
+
+1. `CameraFrameSync` 提供同步后的图像帧
+2. `OpenVINO` 模型直接输出颜色、编号和四角点
+3. 可选传统灯条细化只负责角点修正
+4. `PnP` 负责位姿估计并填充检测结果
 
 ## Runtime Role
 
-- 输入: 相机图像
-- 输出: `armor_detector/results`、`armor_detector/metrics`
+- 输入: `CameraFrameSync<Info>::SyncedFrame`
+- 输出: `armor_detector/armors_result`、`armor_detector/armors_frame`、`armor_detector/metrics`
 - 模型:
   - `model/yolov5.xml` + `model/yolov5.bin`
-  - `model/mlp.onnx`，内容已替换为 `sp_vision` 使用的分类模型
+
+## Public Contract
+
+- `armors_result` 仍然发布 `ArmorDetectionsMessage`
+- `armors_frame` 发布 `ArmorDetectionsFrameMessage<Info>`
+  - `source_frame.image_frame`: 原始共享图像槽位指针
+  - `source_frame.imu`: 同步帧里的姿态/运动数据指针
+  - `results`: 当前帧识别结果
+- `metrics` 仍然发布 `ArmorDetectorMetrics`
+- 仍然只消费 `armors_result` 的录像器、truth publisher 不需要跟着这次接口清理一起改
+
+## Internal Notes
+
+- 不再需要独立 `NumberClassifier`
+- `PnPSolver` 现在直接吃编译期 `CameraInfo`
+- detector 解码阶段不再使用并行数组和散落的输出列号
+- detector 发布 `armors_frame` 时不再额外复制一份 imu/pose 缓冲
 
 ## Debug
 

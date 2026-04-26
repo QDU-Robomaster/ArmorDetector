@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: sp_vision yolov5 armor detector with openvino
+module_description: armor detector with openvino model, optional corner refine, and pnp
 constructor_args:
   cfg:
     detect_color: 1
@@ -12,10 +12,6 @@ constructor_args:
       min_lightbar_ratio: 1.5
       max_lightbar_ratio: 20.0
       min_lightbar_length: 8.0
-      min_armor_ratio: 1.0
-      max_armor_ratio: 5.0
-      max_side_ratio: 1.5
-      max_rectangular_error_deg: 25.0
     yolo:
       use_roi: false
       roi_x: 420
@@ -31,39 +27,68 @@ constructor_args:
       show_binary: false
       wait_key_ms: 1
       overlay_scale: 0.75
-  camera_info:
-    width: 1280
-    height: 720
-    step: 3840
-    encoding: CameraBase::Encoding::BGR8
-    camera_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-    distortion_model: CameraBase::DistortionModel::PLUMB_BOB
-    distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
-    rectification_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-    projection_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-template_args: []
+  sync: '@camera_frame_sync'
+template_args:
+  - Info:
+      width: 1280
+      height: 720
+      step: 3840
+      encoding: CameraTypes::Encoding::BGR8
+      camera_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+      distortion_model: CameraTypes::DistortionModel::PLUMB_BOB
+      distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
+      rectification_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+      projection_matrix: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 required_hardware: []
 depends:
-  - qdu-future/CameraBase
+  - qdu-future/CameraFrameSync
 === END MANIFEST === */
 // clang-format on
 
+#include <algorithm>
 #include <array>
-#include <memory>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <system_error>
 #include <vector>
 
+#include <Eigen/Dense>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/dnn.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <openvino/openvino.hpp>
 
-#include "CameraBase.hpp"
+#include "CameraFrameSync.hpp"
 #include "app_framework.hpp"
 #include "armor.hpp"
 #include "libxr.hpp"
+#include "logger.hpp"
 #include "pnp_solver.hpp"
 
+template <CameraTypes::CameraInfo CameraInfoV>
 class ArmorDetector : public LibXR::Application
 {
  public:
+  using Sync = CameraFrameSync<CameraInfoV>;
+  using CameraInfo = typename Sync::CameraInfo;
+  using ImageFrame = typename Sync::ImageFrame;
+  using ImuStamped = typename Sync::ImuStamped;
+  using SyncedFrame = typename Sync::SyncedFrame;
+  using DetectionMessage = ArmorDetectionsFrameMessage<CameraInfoV>;
+
+  static inline constexpr CameraInfo kCameraInfo = CameraInfoV;
+
   struct TraditionalParams
   {
     double threshold{150.0};
@@ -71,10 +96,6 @@ class ArmorDetector : public LibXR::Application
     double min_lightbar_ratio{1.5};
     double max_lightbar_ratio{20.0};
     double min_lightbar_length{8.0};
-    double min_armor_ratio{1.0};
-    double max_armor_ratio{5.0};
-    double max_side_ratio{1.5};
-    double max_rectangular_error_deg{25.0};
   };
 
   struct YoloParams
@@ -108,7 +129,7 @@ class ArmorDetector : public LibXR::Application
   };
 
   ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg,
-                CameraBase::CameraInfo camera_info);
+                Sync& sync);
 
   void SetConfig(const Config& cfg);
   void OnMonitor() override {}
@@ -128,10 +149,12 @@ class ArmorDetector : public LibXR::Application
     double length{0.0};
     double width{0.0};
     double ratio{0.0};
+    double fill_ratio{0.0};
   };
 
   struct CandidateArmor
   {
+    // 经过网络解码、可选角点细化和类型判定后的内部装甲板表示。
     ArmorColor color{ArmorColor::UNKNOWN};
     ArmorType type{ArmorType::INVALID};
     ArmorNumber number{ArmorNumber::INVALID};
@@ -141,26 +164,44 @@ class ArmorDetector : public LibXR::Application
     cv::Point2f center{};
     cv::Point2f center_norm{};
     double ratio{0.0};
-    double side_ratio{0.0};
-    double rectangular_error{0.0};
-    bool duplicated{false};
   };
 
-  void ProcessImage(const cv::Mat& img_msg, uint64_t image_timestamp_us);
-  void ProcessSharedImageFrame(const CameraBase::SharedImageFrame& frame);
-  static void SharedImageThreadFun(ArmorDetector* self);
+  struct NetworkDetection
+  {
+    // 网络输出的最小语义单元，还没有经过 refine 和类型修正。
+    ArmorColor color{ArmorColor::UNKNOWN};
+    ArmorNumber number{ArmorNumber::UNKNOWN};
+    float confidence{0.0F};
+    cv::Rect box{};
+    std::array<cv::Point2f, 4> points{};
+  };
+
+  void ProcessImage(const cv::Mat& img_msg, const SyncedFrame& synced_frame);
+  void ProcessSyncedFrame(const SyncedFrame& frame);
+  static void SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self);
 
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img, cv::Mat* binary_debug);
-  std::vector<CandidateArmor> Parse(double scale, cv::Mat& output,
-                                    const cv::Mat& bgr_img);
+  std::vector<CandidateArmor> DecodeOutput(double scale,
+                                           const cv::Point2f& input_offset,
+                                           const cv::Mat& output,
+                                           const cv::Mat& bgr_img);
+  std::optional<NetworkDetection> DecodeDetection(
+      double scale, const cv::Point2f& input_offset, const cv::Mat& output,
+      int row) const;
+  CandidateArmor BuildCandidateArmor(const NetworkDetection& detection,
+                                     const cv::Mat& bgr_img) const;
+  cv::Mat BuildTraditionalBinary(const cv::Mat& bgr_img,
+                                 ArmorColor target_color) const;
   bool RefineArmorCorners(CandidateArmor& armor, const cv::Mat& bgr_img) const;
+  void MaybeDumpRefineFailure(const char* reason, const CandidateArmor& armor,
+                              const cv::Rect& bounding_box,
+                              const cv::Mat& armor_roi,
+                              const cv::Mat& binary_img,
+                              const std::vector<Lightbar>& lightbars) const;
   std::vector<Lightbar> DetectLightbars(const cv::Mat& bgr_img,
                                         const cv::Mat& binary_img) const;
   bool ValidateLightbar(const Lightbar& lightbar) const;
-  bool ValidateArmorGeometry(const CandidateArmor& armor) const;
   bool ValidateArmorType(const CandidateArmor& armor) const;
-  bool HasContainedLightbar(const Lightbar& left, const Lightbar& right,
-                            const std::vector<Lightbar>& lightbars) const;
   void UpdateGeometryMetrics(CandidateArmor& armor) const;
   ArmorType InferArmorType(const CandidateArmor& armor) const;
   cv::Point2f GetNormalizedCenter(const cv::Mat& bgr_img,
@@ -174,26 +215,56 @@ class ArmorDetector : public LibXR::Application
 
  private:
   Config cfg_{};
-  CameraBase::CameraInfo camera_info_{};
-  std::unique_ptr<PnPSolver> pnp_solver_{};
+  Sync& sync_;
+  PnPSolver<CameraInfoV> pnp_solver_{};
   uint64_t latest_timestamp_us_{0};
   uint64_t frame_index_{0};
-  LibXR::Thread shared_image_thread_{};
+  LibXR::Thread sync_frame_thread_{};
+  uint32_t decoded_count_{0};
+  uint32_t nms_count_{0};
+  uint32_t semantic_kept_count_{0};
+  uint32_t pnp_success_count_{0};
   uint32_t refined_count_{0};
+  uint32_t refine_attempt_count_{0};
+  uint32_t refine_fail_bbox_oob_count_{0};
+  uint32_t refine_fail_roi_empty_count_{0};
+  uint32_t refine_fail_lightbar_zero_count_{0};
+  uint32_t refine_fail_lightbar_one_count_{0};
+  uint32_t refine_fail_pair_distance_count_{0};
   uint32_t discarded_count_{0};
+  uint32_t semantic_discard_count_{0};
+  uint32_t type_discard_count_{0};
+  double max_objectness_{0.0};
   bool model_ready_{false};
   bool preview_available_{true};
   bool preview_warned_{false};
+  bool audit_every_frame_{false};
+  bool audit_zero_frames_{false};
+  bool disable_traditional_refine_env_{false};
+  bool center_letterbox_env_{false};
+  bool yolo_letterbox_env_{false};
+  bool dump_refine_fails_env_{false};
+  std::string dump_refine_fails_dir_{};
+  uint32_t dump_refine_fails_max_{12};
+  uint32_t dump_refine_fails_count_{0};
 
   ov::Core ov_core_{};
   ov::CompiledModel compiled_model_{};
+  ov::InferRequest infer_request_{};
 
   ArmorDetectionsMessage armors_msg_{};
+  DetectionMessage armors_frame_msg_{};
   ArmorDetectorMetrics metrics_msg_{};
 
   LibXR::Topic::Domain armor_domain_ = LibXR::Topic::Domain("armor_detector");
   LibXR::Topic armors_topic_ =
       LibXR::Topic("armors_result", sizeof(ArmorDetectionsMessage), &armor_domain_);
+  LibXR::Topic armors_frame_topic_ =
+      LibXR::Topic("armors_frame", sizeof(DetectionMessage), &armor_domain_);
   LibXR::Topic metrics_topic_ =
       LibXR::Topic("metrics", sizeof(ArmorDetectorMetrics), &armor_domain_);
 };
+
+#include "ArmorDetectorDetail.hpp"
+#include "ArmorDetectorPipeline.hpp"
+#include "ArmorDetectorPreview.hpp"
