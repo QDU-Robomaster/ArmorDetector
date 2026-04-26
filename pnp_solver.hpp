@@ -73,8 +73,7 @@ cv::Mat PnPSolver<CameraInfoV>::BuildCameraMatrix()
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat PnPSolver<CameraInfoV>::BuildDistCoeffs()
 {
-  const auto dist_coeffs = CameraTypes::CameraInfo::ToPnPDistCoeffs(
-      camera_info.distortion_model, camera_info.distortion_coefficients);
+  const auto dist_coeffs = CameraTypes::BuildPnPDistCoeffs(camera_info);
   if (dist_coeffs.empty())
   {
     return {};
