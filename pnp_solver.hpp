@@ -19,6 +19,8 @@ class PnPSolver
   using CameraInfo = CameraTypes::CameraInfo;
 
   static inline constexpr CameraInfo camera_info = CameraInfoV;
+  static inline constexpr auto pnp_dist_coeffs_info =
+      CameraTypes::BuildPnPDistCoeffs(camera_info);
 
   PnPSolver();
 
@@ -73,14 +75,28 @@ cv::Mat PnPSolver<CameraInfoV>::BuildCameraMatrix()
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat PnPSolver<CameraInfoV>::BuildDistCoeffs()
 {
-  const auto dist_coeffs = CameraTypes::BuildPnPDistCoeffs(camera_info);
-  if (dist_coeffs.empty())
+  if constexpr (pnp_dist_coeffs_info.uses_rational_polynomial_extension)
+  {
+    XR_LOG_WARN(
+        "PnPSolver: using 8-term rational; extend to 14 if backend supports.");
+  }
+
+  if constexpr (pnp_dist_coeffs_info.requires_undistort_first)
+  {
+    XR_LOG_WARN(
+        "PnPSolver: distortion model not natively supported (%d). "
+        "TODO: undistort to pinhole first, then call PnP with NONE.",
+        int(camera_info.distortion_model));
+    return {};
+  }
+
+  if constexpr (pnp_dist_coeffs_info.size == 0)
   {
     return {};
   }
 
-  return cv::Mat(1, static_cast<int>(dist_coeffs.size()), CV_64F,
-                 const_cast<double*>(dist_coeffs.data()))
+  return cv::Mat(1, static_cast<int>(pnp_dist_coeffs_info.size), CV_64F,
+                 const_cast<double*>(pnp_dist_coeffs_info.values.data()))
       .clone();
 }
 
