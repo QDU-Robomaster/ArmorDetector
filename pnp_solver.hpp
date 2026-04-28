@@ -26,7 +26,8 @@ class PnPSolver
 
   [[nodiscard]] bool SolvePnP(const std::array<cv::Point2f, 4>& image_armor_points,
                               ArmorType armor_type, cv::Mat& rvec,
-                              cv::Mat& tvec) const;
+                              cv::Mat& tvec,
+                              double* reprojection_error_px = nullptr) const;
 
   [[nodiscard]] double CalculateDistanceToCenter(
       const cv::Point2f& image_point) const;
@@ -117,8 +118,13 @@ std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_m
 template <CameraTypes::CameraInfo CameraInfoV>
 bool PnPSolver<CameraInfoV>::SolvePnP(
     const std::array<cv::Point2f, 4>& image_armor_points, ArmorType armor_type,
-    cv::Mat& rvec, cv::Mat& tvec) const
+    cv::Mat& rvec, cv::Mat& tvec, double* reprojection_error_px) const
 {
+  if (reprojection_error_px != nullptr)
+  {
+    *reprojection_error_px = std::numeric_limits<double>::infinity();
+  }
+
   const std::array<cv::Point2f, 4> base_points = {
       image_armor_points[3], image_armor_points[0], image_armor_points[1],
       image_armor_points[2]};
@@ -241,6 +247,10 @@ bool PnPSolver<CameraInfoV>::SolvePnP(
   }
 #endif
 
+  if (found && reprojection_error_px != nullptr)
+  {
+    *reprojection_error_px = best_error;
+  }
   return found;
 }
 

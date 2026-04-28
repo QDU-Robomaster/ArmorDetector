@@ -261,19 +261,19 @@ void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_fr
     return;
   }
 
-  const int cv_type = detail::CvTypeFromEncoding(kCameraInfo.encoding);
+  const int cv_type = detail::CvTypeFromEncoding(camera_info.encoding);
   if (cv_type < 0)
   {
     XR_LOG_WARN("ArmorDetector sync frame encoding unsupported: %u",
-                static_cast<unsigned>(kCameraInfo.encoding));
+                static_cast<unsigned>(camera_info.encoding));
     return;
   }
 
-  cv::Mat img(static_cast<int>(kCameraInfo.height), static_cast<int>(kCameraInfo.width),
+  cv::Mat img(static_cast<int>(camera_info.height), static_cast<int>(camera_info.width),
               cv_type, const_cast<uint8_t*>(image_frame->data.data()),
-              static_cast<size_t>(kCameraInfo.step));
+              static_cast<size_t>(camera_info.step));
   const cv::Mat bgr_img =
-      detail::ConvertToBgrWithEncoding(img, kCameraInfo.encoding);
+      detail::ConvertToBgrWithEncoding(img, camera_info.encoding);
   if (bgr_img.empty())
   {
     return;
@@ -287,44 +287,34 @@ void ArmorDetector<CameraInfoV>::SyncFrameThreadFun(ArmorDetector<CameraInfoV>* 
   XR_LOG_INFO("ArmorDetector sync worker starting: image=%s imu=%s",
               self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
 
-  bool attach_logged = false;
+  typename Sync::Subscriber subscriber(self->sync_);
+  if (!subscriber.Valid())
+  {
+    XR_LOG_ERROR("ArmorDetector failed to attach sync image topic: %s",
+                 self->sync_.ImageTopicName());
+    return;
+  }
+
+  XR_LOG_PASS("ArmorDetector attached sync stream: image=%s imu=%s",
+              self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
+
+  SyncedFrame synced_frame;
   while (true)
   {
-    typename Sync::Subscriber subscriber(self->sync_);
-    if (!subscriber.Valid())
+    const auto wait_ans =
+        subscriber.Wait(synced_frame, detail::sync_frame_wait_timeout_ms);
+    if (wait_ans == LibXR::ErrorCode::TIMEOUT)
     {
-      if (!attach_logged)
-      {
-        XR_LOG_WARN("ArmorDetector waiting for sync image topic: %s",
-                    self->sync_.ImageTopicName());
-        attach_logged = true;
-      }
-      LibXR::Thread::Sleep(detail::sync_frame_retry_sleep_ms);
       continue;
     }
-
-    XR_LOG_PASS("ArmorDetector attached sync stream: image=%s imu=%s",
-                self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
-    attach_logged = false;
-
-    SyncedFrame synced_frame;
-    while (true)
+    if (wait_ans != LibXR::ErrorCode::OK)
     {
-      const auto wait_ans =
-          subscriber.Wait(synced_frame, detail::sync_frame_wait_timeout_ms);
-      if (wait_ans == LibXR::ErrorCode::TIMEOUT)
-      {
-        continue;
-      }
-      if (wait_ans != LibXR::ErrorCode::OK)
-      {
-        XR_LOG_WARN("ArmorDetector sync wait failed (err=%d), retrying attach.",
-                    static_cast<int>(wait_ans));
-        break;
-      }
-
-      self->ProcessSyncedFrame(synced_frame);
+      XR_LOG_ERROR("ArmorDetector sync wait failed (err=%d), worker stopped.",
+                   static_cast<int>(wait_ans));
+      return;
     }
+
+    self->ProcessSyncedFrame(synced_frame);
   }
 }
 
@@ -660,6 +650,8 @@ ArmorDetector<CameraInfoV>::BuildCandidateArmor(
   armor.confidence = detection.confidence;
   armor.box = detection.box;
   armor.points = detection.points;
+  armor.raw_points_valid = true;
+  armor.raw_points = detection.points;
   armor.center = detail::quad_center(armor.points);
   armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
   UpdateGeometryMetrics(armor);
@@ -787,6 +779,7 @@ bool ArmorDetector<CameraInfoV>::RefineArmorCorners(
   armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
   armor.box = cv::boundingRect(
       std::vector<cv::Point2f>(armor.points.begin(), armor.points.end()));
+  armor.refined = true;
   UpdateGeometryMetrics(armor);
   return true;
 }
@@ -1083,14 +1076,21 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
     result.confidence = armor.confidence;
     result.box = armor.box;
     result.points = armor.points;
+    result.raw_points_valid = armor.raw_points_valid;
+    result.refined = armor.refined;
+    result.raw_points = armor.raw_points;
     result.center = armor.center;
     result.center_norm = GetNormalizedCenter(bgr_img, armor.center);
     result.distance_to_image_center = pnp_solver_.CalculateDistanceToCenter(armor.center);
 
     cv::Mat rvec;
     cv::Mat tvec;
-    if (pnp_solver_.SolvePnP(armor.points, armor.type, rvec, tvec))
+    double pnp_reprojection_error_px = 0.0;
+    if (pnp_solver_.SolvePnP(armor.points, armor.type, rvec, tvec,
+                             &pnp_reprojection_error_px))
     {
+      result.pnp_valid = true;
+      result.pnp_reprojection_error_px = pnp_reprojection_error_px;
       result.pose = detail::make_pose(rvec, tvec);
       ++pnp_success_count_;
     }

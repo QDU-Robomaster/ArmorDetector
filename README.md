@@ -30,6 +30,9 @@
 - `PnPSolver` 现在直接吃编译期 `CameraInfo`
 - detector 解码阶段不再使用并行数组和散落的输出列号
 - detector 发布 `armors_frame` 时不再额外复制一份 imu/pose 缓冲
+- `ArmorDetectorResult` 保留诊断字段：
+  - `raw_points / refined` 用于区分网络原始角点和传统细化后的角点
+  - `pnp_valid / pnp_reprojection_error_px` 用于判断当前 PnP 解本身是否可信
 
 ## Debug
 

@@ -61,7 +61,7 @@ jobs:
 
       - name: Pull libxr to ./libxr
         run: |
-          git clone --depth=1 --branch fix/webots-time-semantics-master-20260416 \
+          git clone --depth=1 --branch master \
             https://github.com/Jiu-xiao/libxr ./libxr
 
       - name: Setup Python & Install deps
@@ -88,9 +88,9 @@ jobs:
         run: |
           rm -f Modules/modules.yaml
           xrobot_add_mod xrobot-org/BlinkLED@master
-          xrobot_add_mod qdu-future/CameraBase@feat/camerainfo-staticinfo-cxx20-20260420
-          xrobot_add_mod qdu-future/WebotsCamera@feat/camerainfo-staticinfo-cxx20-20260420
-          xrobot_add_mod qdu-future/CameraFrameSync@feat/camera-frame-sync-mode1-20260421
+          xrobot_add_mod qdu-future/CameraBase@master
+          xrobot_add_mod qdu-future/WebotsCamera@master
+          xrobot_add_mod qdu-future/CameraFrameSync@master
           cat Modules/modules.yaml
 
       - name: Sync dependency repos

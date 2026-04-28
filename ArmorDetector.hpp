@@ -87,7 +87,7 @@ class ArmorDetector : public LibXR::Application
   using SyncedFrame = typename Sync::SyncedFrame;
   using DetectionMessage = ArmorDetectionsFrameMessage<CameraInfoV>;
 
-  static inline constexpr CameraInfo kCameraInfo = CameraInfoV;
+  static inline constexpr CameraInfo camera_info = CameraInfoV;
 
   struct TraditionalParams
   {
@@ -161,6 +161,9 @@ class ArmorDetector : public LibXR::Application
     float confidence{0.0F};
     cv::Rect box{};
     std::array<cv::Point2f, 4> points{};
+    bool raw_points_valid{false};
+    bool refined{false};
+    std::array<cv::Point2f, 4> raw_points{};
     cv::Point2f center{};
     cv::Point2f center_norm{};
     double ratio{0.0};

@@ -108,9 +108,14 @@ struct ArmorDetectorResult
   float confidence{0.0F};
   cv::Rect box{};
   std::array<cv::Point2f, 4> points{};
+  bool raw_points_valid{false};
+  bool refined{false};
+  std::array<cv::Point2f, 4> raw_points{};
   cv::Point2f center{};
   cv::Point2f center_norm{};
   double distance_to_image_center{0.0};
+  bool pnp_valid{false};
+  double pnp_reprojection_error_px{0.0};
   LibXR::Transform<double> pose{};
 };
 

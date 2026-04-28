@@ -12,7 +12,6 @@ constexpr double header_bar_alpha = 0.78;
 constexpr float point_radius = 4.0F;
 constexpr int preview_header_height = 54;
 constexpr uint32_t sync_frame_wait_timeout_ms = 100;
-constexpr uint32_t sync_frame_retry_sleep_ms = 200;
 constexpr uint32_t metrics_log_period = 30;
 constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
 
