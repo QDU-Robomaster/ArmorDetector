@@ -184,56 +184,68 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   armors_topic_.Publish(armors_msg_);
   metrics_topic_.Publish(metrics_msg_);
 
+  const uint32_t log_frame = detail::to_log_u32(metrics_msg_.frame_index);
+  const uint32_t log_timestamp_ms =
+      detail::to_log_u32(metrics_msg_.image_timestamp_us / 1000ULL);
+  const uint32_t log_max_objectness_x1000 =
+      detail::scaled_log_u32(metrics_msg_.max_objectness, 1000.0);
+  const uint32_t log_detector_ms_x100 =
+      detail::scaled_log_u32(metrics_msg_.detector_latency_ms, 100.0);
+  const uint32_t log_publish_ms_x100 =
+      detail::scaled_log_u32(metrics_msg_.publish_latency_ms, 100.0);
+
   if (diagnostics_.audit_every_frame)
   {
     XR_LOG_INFO(
-        "ArmorDetector audit frame=%llu ts=%llu decoded=%u nms=%u semantic_kept=%u armors=%u "
-        "pnp=%u refined=%u semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f detector_ms=%.2f "
-        "publish_ms=%.2f",
-        static_cast<unsigned long long>(metrics_msg_.frame_index),
-        static_cast<unsigned long long>(metrics_msg_.image_timestamp_us),
+        "ArmorDetector audit frame=%u ts_ms=%u decoded=%u nms=%u semantic_kept=%u armors=%u",
+        log_frame, log_timestamp_ms,
         metrics_msg_.decoded_count, metrics_msg_.nms_count,
-        metrics_msg_.semantic_kept_count, metrics_msg_.armor_count,
+        metrics_msg_.semantic_kept_count, metrics_msg_.armor_count);
+    XR_LOG_INFO(
+        "ArmorDetector audit pnp=%u refined=%u semantic_discard=%u type_discard=%u discarded=%u max_obj_x1000=%u",
         metrics_msg_.pnp_success_count, metrics_msg_.refined_count,
         metrics_msg_.semantic_discard_count, metrics_msg_.type_discard_count,
-        metrics_msg_.discarded_count, metrics_msg_.max_objectness,
-        metrics_msg_.detector_latency_ms,
-        metrics_msg_.publish_latency_ms);
+        metrics_msg_.discarded_count, log_max_objectness_x1000);
+    XR_LOG_INFO("ArmorDetector audit detector_ms_x100=%u publish_ms_x100=%u",
+                log_detector_ms_x100, log_publish_ms_x100);
   }
   else if (diagnostics_.audit_zero_frames && metrics_msg_.armor_count == 0U)
   {
     XR_LOG_WARN(
-        "ArmorDetector zero frame=%llu ts=%llu decoded=%u nms=%u semantic_kept=%u pnp=%u "
-        "refined=%u semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f detector_ms=%.2f "
-        "publish_ms=%.2f",
-        static_cast<unsigned long long>(metrics_msg_.frame_index),
-        static_cast<unsigned long long>(metrics_msg_.image_timestamp_us),
+        "ArmorDetector zero frame=%u ts_ms=%u decoded=%u nms=%u semantic_kept=%u pnp=%u",
+        log_frame, log_timestamp_ms,
         metrics_msg_.decoded_count, metrics_msg_.nms_count,
-        metrics_msg_.semantic_kept_count, metrics_msg_.pnp_success_count,
+        metrics_msg_.semantic_kept_count, metrics_msg_.pnp_success_count);
+    XR_LOG_WARN(
+        "ArmorDetector zero refined=%u semantic_discard=%u type_discard=%u discarded=%u max_obj_x1000=%u",
         metrics_msg_.refined_count, metrics_msg_.semantic_discard_count,
         metrics_msg_.type_discard_count, metrics_msg_.discarded_count,
-        metrics_msg_.max_objectness, metrics_msg_.detector_latency_ms,
-        metrics_msg_.publish_latency_ms);
+        log_max_objectness_x1000);
+    XR_LOG_WARN("ArmorDetector zero detector_ms_x100=%u publish_ms_x100=%u",
+                log_detector_ms_x100, log_publish_ms_x100);
   }
   else if ((frame_index_ % detail::metrics_log_period) == 0U)
   {
     XR_LOG_INFO(
-        "ArmorDetector frame=%llu armors=%u decoded=%u nms=%u semantic_kept=%u refined=%u "
-        "refine_attempt=%u refine_fail_bbox=%u refine_fail_roi=%u refine_fail_l0=%u refine_fail_l1=%u refine_fail_pair=%u "
-        "semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f detector_ms=%.2f publish_ms=%.2f",
-        static_cast<unsigned long long>(metrics_msg_.frame_index),
+        "ArmorDetector frame=%u armors=%u decoded=%u nms=%u semantic_kept=%u refined=%u",
+        log_frame,
         metrics_msg_.armor_count, metrics_msg_.decoded_count,
         metrics_msg_.nms_count, metrics_msg_.semantic_kept_count,
-        metrics_msg_.refined_count, counters_.refine_attempt_count,
+        metrics_msg_.refined_count);
+    XR_LOG_INFO(
+        "ArmorDetector refine_attempt=%u fail_bbox=%u fail_roi=%u fail_l0=%u fail_l1=%u fail_pair=%u",
+        counters_.refine_attempt_count,
         counters_.refine_fail_bbox_oob_count,
         counters_.refine_fail_roi_empty_count,
         counters_.refine_fail_lightbar_zero_count,
         counters_.refine_fail_lightbar_one_count,
-        counters_.refine_fail_pair_distance_count,
+        counters_.refine_fail_pair_distance_count);
+    XR_LOG_INFO(
+        "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj_x1000=%u detector_ms_x100=%u publish_ms_x100=%u",
         metrics_msg_.semantic_discard_count,
         metrics_msg_.type_discard_count, metrics_msg_.discarded_count,
-        metrics_msg_.max_objectness,
-        metrics_msg_.detector_latency_ms, metrics_msg_.publish_latency_ms);
+        log_max_objectness_x1000,
+        log_detector_ms_x100, log_publish_ms_x100);
   }
 }
 

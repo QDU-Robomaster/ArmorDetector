@@ -15,6 +15,28 @@ constexpr uint32_t sync_frame_wait_timeout_ms = 100;
 constexpr uint32_t metrics_log_period = 30;
 constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
 
+inline uint32_t to_log_u32(uint64_t value)
+{
+  return value > std::numeric_limits<uint32_t>::max()
+             ? std::numeric_limits<uint32_t>::max()
+             : static_cast<uint32_t>(value);
+}
+
+inline uint32_t scaled_log_u32(double value, double scale)
+{
+  if (!std::isfinite(value) || value <= 0.0)
+  {
+    return 0U;
+  }
+
+  const double scaled = value * scale;
+  if (scaled >= static_cast<double>(std::numeric_limits<uint32_t>::max()))
+  {
+    return std::numeric_limits<uint32_t>::max();
+  }
+  return static_cast<uint32_t>(std::lround(scaled));
+}
+
 struct OutputLayout
 {
   static constexpr int objectness_index = 8;
