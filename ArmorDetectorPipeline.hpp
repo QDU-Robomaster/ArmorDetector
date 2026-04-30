@@ -143,14 +143,7 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   const auto start_time = std::chrono::steady_clock::now();
   const cv::Mat& bgr_img = img_msg;
 
-  cv::Mat binary_debug;
-  cv::Mat* binary_debug_ptr = nullptr;
-  if (cfg_.debug.preview && cfg_.debug.show_binary)
-  {
-    binary_debug_ptr = &binary_debug;
-  }
-
-  const auto armors = Detect(bgr_img, binary_debug_ptr);
+  const auto armors = Detect(bgr_img);
   const auto detector_finish = std::chrono::steady_clock::now();
 
   FillResultMessage(armors, bgr_img);
@@ -173,11 +166,6 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
       std::chrono::duration<double, std::milli>(detector_finish - start_time).count();
   metrics_msg_.publish_latency_ms =
       std::chrono::duration<double, std::milli>(publish_finish - detector_finish).count();
-
-  if (ShouldShowPreview())
-  {
-    ShowDebugPreview(bgr_img, binary_debug_ptr);
-  }
 
   armors_frame_msg_.results = armors_msg_.results;
   armors_frame_topic_.Publish(armors_frame_msg_);
@@ -318,8 +306,7 @@ void ArmorDetector<CameraInfoV>::SyncFrameThreadFun(ArmorDetector<CameraInfoV>* 
 
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
-ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img,
-                                   cv::Mat* binary_debug)
+ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
 {
   counters_.decoded_count = 0U;
   counters_.nms_count = 0U;
@@ -367,25 +354,6 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img,
     detector_img = raw_img(clipped_roi);
     offset = cv::Point2f(static_cast<float>(clipped_roi.x),
                          static_cast<float>(clipped_roi.y));
-  }
-
-  // 2. 仅在调试预览时构造二值化图，避免把传统细化的调试逻辑散落到主链路里。
-  if (binary_debug != nullptr)
-  {
-    const ArmorColor configured_target_color =
-        detail::detect_color_from_config(cfg_.detect_color);
-    cv::Mat threshold_img =
-        BuildTraditionalBinary(detector_img, configured_target_color);
-
-    if (cfg_.yolo.use_roi)
-    {
-      *binary_debug = cv::Mat::zeros(raw_img.size(), CV_8UC1);
-      threshold_img.copyTo((*binary_debug)(clipped_roi));
-    }
-    else
-    {
-      *binary_debug = threshold_img;
-    }
   }
 
   const double height_scale =
