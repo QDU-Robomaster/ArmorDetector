@@ -3,14 +3,9 @@
 // 仅供 ArmorDetector.hpp 在类声明之后包含。
 namespace armor_detector_detail
 {
-// 只保留与模块主体无关的低层工具，避免 detector 主逻辑里充满魔法数字和绘图细节。
+// 只保留与模块主体相关的低层工具，避免 detector 主逻辑里充满魔法数字。
 constexpr double deg2rad = CV_PI / 180.0;
 constexpr int yolo_input_size = 640;
-constexpr int info_panel_width = 360;
-constexpr int max_debug_armors = 6;
-constexpr double header_bar_alpha = 0.78;
-constexpr float point_radius = 4.0F;
-constexpr int preview_header_height = 54;
 constexpr uint32_t sync_frame_wait_timeout_ms = 100;
 constexpr uint32_t metrics_log_period = 30;
 constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
@@ -173,87 +168,6 @@ inline std::array<cv::Point2f, 4> sort_keypoints(
   return {top_points[0], top_points[1], bottom_points[1], bottom_points[0]};
 }
 
-inline std::string armor_number_to_string(ArmorNumber number)
-{
-  const std::size_t index = static_cast<std::size_t>(number);
-  if (index >= ARMOR_NUMBER_NAMES.size())
-  {
-    return "invalid";
-  }
-  return std::string(ARMOR_NUMBER_NAMES[index]);
-}
-
-inline std::string armor_type_to_string(ArmorType type)
-{
-  const std::size_t index = static_cast<std::size_t>(type);
-  if (index >= ARMOR_TYPE_NAMES.size())
-  {
-    return "invalid";
-  }
-  return std::string(ARMOR_TYPE_NAMES[index]);
-}
-
-inline std::string format_float(double value, int precision = 3)
-{
-  std::ostringstream stream;
-  stream << std::fixed << std::setprecision(precision) << value;
-  return stream.str();
-}
-
-inline cv::Scalar color_to_scalar(ArmorColor color)
-{
-  switch (color)
-  {
-    case ArmorColor::BLUE:
-      return cv::Scalar(255, 180, 40);
-    case ArmorColor::RED:
-      return cv::Scalar(60, 90, 255);
-    case ArmorColor::EXTINGUISH:
-      return cv::Scalar(180, 180, 180);
-    case ArmorColor::PURPLE:
-      return cv::Scalar(220, 70, 220);
-    case ArmorColor::UNKNOWN:
-    default:
-      return cv::Scalar(150, 220, 150);
-  }
-}
-
-inline void draw_label_chip(cv::Mat& canvas, const std::string& text,
-                            const cv::Point& origin, const cv::Scalar& color)
-{
-  constexpr int font = cv::FONT_HERSHEY_DUPLEX;
-  constexpr double font_scale = 0.55;
-  constexpr int thickness = 1;
-  constexpr int padding_x = 8;
-  constexpr int padding_y = 6;
-
-  int baseline = 0;
-  const cv::Size text_size =
-      cv::getTextSize(text, font, font_scale, thickness, &baseline);
-  const cv::Rect bg_rect(origin.x, origin.y - text_size.height - padding_y,
-                         text_size.width + 2 * padding_x,
-                         text_size.height + 2 * padding_y);
-  cv::rectangle(canvas, bg_rect, color, cv::FILLED, cv::LINE_AA);
-  cv::putText(canvas, text,
-              cv::Point(origin.x + padding_x,
-                        origin.y - padding_y + baseline / 2),
-              font, font_scale, cv::Scalar(12, 16, 24), thickness, cv::LINE_AA);
-}
-
-inline void draw_info_row(cv::Mat& canvas, int x, int y, const std::string& key,
-                          const std::string& value,
-                          const cv::Scalar& value_color)
-{
-  constexpr int font = cv::FONT_HERSHEY_DUPLEX;
-  constexpr double font_scale = 0.55;
-  constexpr int thickness = 1;
-
-  cv::putText(canvas, key, cv::Point(x, y), font, font_scale,
-              cv::Scalar(170, 182, 196), thickness, cv::LINE_AA);
-  cv::putText(canvas, value, cv::Point(x + 145, y), font, font_scale, value_color,
-              thickness, cv::LINE_AA);
-}
-
 inline LibXR::Transform<double> make_pose(const cv::Mat& rvec, const cv::Mat& tvec)
 {
   cv::Mat rotation_cv;
@@ -299,23 +213,6 @@ inline cv::Rect bounding_rect_from_points(
           std::max(1, static_cast<int>(max_y - min_y))};
 }
 
-inline const char* target_color_name(ArmorColor color)
-{
-  if (color == ArmorColor::BLUE)
-  {
-    return "blue";
-  }
-  if (color == ArmorColor::RED)
-  {
-    return "red";
-  }
-  return "any";
-}
-
-inline std::string armor_display_name(ArmorNumber number, ArmorType type)
-{
-  return armor_number_to_string(number) + " / " + armor_type_to_string(type);
-}
 }  // namespace armor_detector_detail
 
 namespace detail = armor_detector_detail;

@@ -22,11 +22,6 @@ constructor_args:
       score_threshold: 0.7
       nms_threshold: 0.3
       min_confidence: 0.8
-    debug:
-      preview: false
-      show_binary: false
-      wait_key_ms: 1
-      overlay_scale: 0.75
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -64,7 +59,6 @@ depends:
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/dnn.hpp>
-#include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <openvino/openvino.hpp>
@@ -111,21 +105,12 @@ class ArmorDetector : public LibXR::Application
     double min_confidence{0.8};
   };
 
-  struct DebugParams
-  {
-    bool preview{false};
-    bool show_binary{false};
-    int wait_key_ms{1};
-    double overlay_scale{0.75};
-  };
-
   struct Config
   {
     // 0 = 红色，1 = 蓝色，2 = 不限制颜色。
     int detect_color{1};
     TraditionalParams traditional{};
     YoloParams yolo{};
-    DebugParams debug{};
   };
 
   ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg,
@@ -215,7 +200,7 @@ class ArmorDetector : public LibXR::Application
   void ProcessSyncedFrame(const SyncedFrame& frame);
   static void SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self);
 
-  std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img, cv::Mat* binary_debug);
+  std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img);
   std::vector<CandidateArmor> DecodeOutput(double scale,
                                            const cv::Point2f& input_offset,
                                            const cv::Mat& output,
@@ -245,8 +230,6 @@ class ArmorDetector : public LibXR::Application
                              const std::vector<cv::Point>& contour) const;
   void FillResultMessage(const std::vector<CandidateArmor>& armors,
                          const cv::Mat& bgr_img);
-  void ShowDebugPreview(const cv::Mat& bgr_img, const cv::Mat* binary_debug);
-  bool ShouldShowPreview();
 
  private:
   Config cfg_{};
@@ -258,8 +241,6 @@ class ArmorDetector : public LibXR::Application
   FrameCounters counters_{};
   DiagnosticOptions diagnostics_{};
   bool model_ready_{false};
-  bool preview_available_{true};
-  bool preview_warned_{false};
 
   ov::Core ov_core_{};
   ov::CompiledModel compiled_model_{};
@@ -280,4 +261,3 @@ class ArmorDetector : public LibXR::Application
 
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorPipeline.hpp"
-#include "ArmorDetectorPreview.hpp"

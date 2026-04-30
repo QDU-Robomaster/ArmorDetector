@@ -34,11 +34,11 @@
   - `raw_points / refined` 用于区分网络原始角点和传统细化后的角点
   - `pnp_valid / pnp_reprojection_error_px` 用于判断当前 PnP 解本身是否可信
 
-## 调试开关
+## 调试与预览
 
-- 打开预览: 设置 `armor_detector.debug.preview: true`
-- 可选项:
-  - `armor_detector.debug.show_binary`
+- Detector 不再直接创建窗口或绘制预览。
+- 实时预览、原始视频和数据落盘由独立 `VisionPreview` 模块订阅 topic 后完成。
+- 可选算法项:
   - `armor_detector.yolo.use_roi`
   - `armor_detector.yolo.use_traditional_refine`
 - 环境变量只用于运行期诊断，不作为模块主配置接口：
