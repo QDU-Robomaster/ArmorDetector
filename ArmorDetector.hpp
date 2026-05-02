@@ -79,6 +79,7 @@ class ArmorDetector : public LibXR::Application
   using ImageFrame = typename Sync::ImageFrame;
   using ImuStamped = typename Sync::ImuStamped;
   using SyncedFrame = typename Sync::SyncedFrame;
+  using DetectionPacket = ArmorDetectionsFramePacket<CameraInfoV>;
   using DetectionMessage = ArmorDetectionsFrameMessage<CameraInfoV>;
 
   static inline constexpr CameraInfo camera_info = CameraInfoV;
@@ -246,8 +247,10 @@ class ArmorDetector : public LibXR::Application
   ov::CompiledModel compiled_model_{};
   ov::InferRequest infer_request_{};
 
-  ArmorDetectionsMessage armors_msg_{};
-  DetectionMessage armors_frame_msg_{};
+  ArmorDetectionsPacket armors_packet_{};
+  ArmorDetectionsMessage armors_msg_{&armors_packet_};
+  DetectionPacket armors_frame_packet_{};
+  DetectionMessage armors_frame_msg_{&armors_frame_packet_};
   ArmorDetectorMetrics metrics_msg_{};
 
   LibXR::Topic::Domain armor_domain_ = LibXR::Topic::Domain("armor_detector");

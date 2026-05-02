@@ -135,9 +135,10 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   }
 
   const uint64_t image_timestamp_us = image_frame->timestamp_us;
-  armors_frame_msg_.source_frame.image_timestamp_us = image_timestamp_us;
-  armors_frame_msg_.source_frame.image_frame = image_frame;
-  armors_frame_msg_.source_frame.imu = &synced_frame.imu;
+  armors_frame_packet_.source_frame.image_timestamp_us = image_timestamp_us;
+  armors_frame_packet_.source_frame.image_frame = image_frame;
+  armors_frame_packet_.source_frame.imu = &synced_frame.imu;
+  armors_frame_packet_.detections = &armors_packet_;
   latest_timestamp_us_ = image_timestamp_us;
 
   const auto start_time = std::chrono::steady_clock::now();
@@ -155,7 +156,7 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   metrics_msg_.decoded_count = counters_.decoded_count;
   metrics_msg_.nms_count = counters_.nms_count;
   metrics_msg_.semantic_kept_count = counters_.semantic_kept_count;
-  metrics_msg_.armor_count = static_cast<uint32_t>(armors_msg_.results.size());
+  metrics_msg_.armor_count = static_cast<uint32_t>(armors_packet_.results.size());
   metrics_msg_.pnp_success_count = counters_.pnp_success_count;
   metrics_msg_.refined_count = counters_.refined_count;
   metrics_msg_.discarded_count = counters_.discarded_count;
@@ -167,7 +168,8 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   metrics_msg_.publish_latency_ms =
       std::chrono::duration<double, std::milli>(publish_finish - detector_finish).count();
 
-  armors_frame_msg_.results = armors_msg_.results;
+  armors_msg_.packet = &armors_packet_;
+  armors_frame_msg_.packet = &armors_frame_packet_;
   armors_frame_topic_.Publish(armors_frame_msg_);
   armors_topic_.Publish(armors_msg_);
   metrics_topic_.Publish(metrics_msg_);
@@ -1030,9 +1032,9 @@ template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::FillResultMessage(
     const std::vector<CandidateArmor>& armors, const cv::Mat& bgr_img)
 {
-  armors_msg_.image_timestamp_us = latest_timestamp_us_;
-  armors_msg_.results.clear();
-  armors_msg_.results.reserve(armors.size());
+  armors_packet_.image_timestamp_us = latest_timestamp_us_;
+  armors_packet_.results.clear();
+  armors_packet_.results.reserve(armors.size());
 
   for (const auto& armor : armors)
   {
@@ -1063,7 +1065,7 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
       ++counters_.pnp_success_count;
     }
 
-    armors_msg_.results.emplace_back(std::move(result));
+    armors_packet_.results.emplace_back(std::move(result));
   }
 
 }
