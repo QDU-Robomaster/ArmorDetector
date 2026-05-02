@@ -121,6 +121,15 @@ struct ArmorDetectorResult
 
 using ArmorDetectorResults = std::vector<ArmorDetectorResult>;
 
+struct ArmorDetectionsPacket
+{
+  uint64_t image_timestamp_us{0};
+  ArmorDetectorResults results{};
+};
+
+// Topic 只发布 detector 持有的结果指针；不能跨进程传输或延后解引用。
+using ArmorDetectionsMessage = ArmorDetectionsPacket*;
+
 // 这一层专门描述 detector 当前处理的原始同步帧引用。
 // 指针只在同进程 callback 链路里有效，不能跨帧缓存。
 template <CameraTypes::CameraInfo CameraInfoV>
@@ -139,17 +148,15 @@ struct ArmorDetectionsSourceFrame
 // detector 在发布时把当前帧的结果和原始帧引用一起交给 tracker，
 // tracker 必须在回调里立刻消费，不能把这些指针跨帧保存。
 template <CameraTypes::CameraInfo CameraInfoV>
-struct ArmorDetectionsFrameMessage
+struct ArmorDetectionsFramePacket
 {
   ArmorDetectionsSourceFrame<CameraInfoV> source_frame{};
-  ArmorDetectorResults results{};
+  ArmorDetectionsPacket* detections{nullptr};
 };
 
-struct ArmorDetectionsMessage
-{
-  uint64_t image_timestamp_us{0};
-  ArmorDetectorResults results{};
-};
+// armors_frame 的 Topic payload。tracker 必须在回调内同步消费指针。
+template <CameraTypes::CameraInfo CameraInfoV>
+using ArmorDetectionsFrameMessage = ArmorDetectionsFramePacket<CameraInfoV>*;
 
 struct ArmorDetectorMetrics
 {
