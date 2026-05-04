@@ -32,10 +32,7 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
 }
 
 /**
- * @brief 更新配置、解析诊断环境变量并重新加载模型。
- *
- * 支持的诊断环境变量包括每帧 audit、零检测帧 audit、关闭传统细化和细化
- * 失败 dump。算法切换环境变量只服务一次性对比实验，生产配置应写入 Config。
+ * @brief 更新配置并重新加载模型。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param cfg 新 detector 配置。
@@ -43,140 +40,8 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
 {
-  auto parse_env_flag = [](const char* name) -> bool
-  {
-    if (const char* env = std::getenv(name))
-    {
-      return env[0] != '\0' && env[0] != '0';
-    }
-    return false;
-  };
-  auto parse_env_u32 = [](const char* name, uint32_t fallback) -> uint32_t
-  {
-    if (const char* env = std::getenv(name))
-    {
-      if (env[0] == '\0')
-      {
-        return fallback;
-      }
-      const unsigned long parsed = std::strtoul(env, nullptr, 10);
-      if (parsed > 0UL)
-      {
-        return static_cast<uint32_t>(parsed);
-      }
-    }
-    return fallback;
-  };
-  auto parse_env_f64 = [](const char* name, double fallback) -> double
-  {
-    if (const char* env = std::getenv(name))
-    {
-      if (env[0] == '\0')
-      {
-        return fallback;
-      }
-      char* end = nullptr;
-      const double parsed = std::strtod(env, &end);
-      if (end != env && std::isfinite(parsed) && parsed > 0.0)
-      {
-        return parsed;
-      }
-    }
-    return fallback;
-  };
-  auto env_text = [](const char* name) -> const char*
-  {
-    const char* env = std::getenv(name);
-    return (env != nullptr && env[0] != '\0') ? env : nullptr;
-  };
-
   cfg_ = cfg;
   counters_ = {};
-  diagnostics_ = {};
-  cfg_.network.input_scale =
-      parse_env_f64("XR_ARMOR_DETECTOR_INPUT_SCALE", cfg_.network.input_scale);
-  if (const char* env = env_text("XR_ARMOR_DETECTOR_DIRECT_POINT_ORDER"))
-  {
-    const std::string value(env);
-    if (value == "declared" || value == "declared_order")
-    {
-      cfg_.network.direct_point_order =
-          detail::DirectKeypointPointOrder::DECLARED_ORDER;
-    }
-    else if (value == "sort" || value == "canonical_sort")
-    {
-      cfg_.network.direct_point_order =
-          detail::DirectKeypointPointOrder::CANONICAL_SORT;
-    }
-    else
-    {
-      XR_LOG_WARN("ArmorDetector unknown direct point order %s", env);
-    }
-  }
-  if (const char* env = env_text("XR_ARMOR_DETECTOR_CORNER_REFINE_MODE"))
-  {
-    const std::string value(env);
-    if (value == "split" || value == "split_roi_weighted")
-    {
-      cfg_.traditional.refine_mode =
-          detail::CornerRefineMode::SPLIT_ROI_WEIGHTED;
-    }
-    else if (value == "pair" || value == "pair_roi")
-    {
-      cfg_.traditional.refine_mode = detail::CornerRefineMode::PAIR_ROI;
-    }
-    else
-    {
-      XR_LOG_WARN("ArmorDetector unknown corner refine mode %s", env);
-    }
-  }
-  if (const char* env = env_text("XR_ARMOR_DETECTOR_PNP_STRATEGY"))
-  {
-    const std::string value(env);
-    if (value == "ippe" || value == "ippe_only")
-    {
-      cfg_.network.pnp_strategy = detail::PnpSolveStrategy::IPPE_ONLY;
-    }
-    else if (value == "robust")
-    {
-      cfg_.network.pnp_strategy = detail::PnpSolveStrategy::ROBUST;
-    }
-    else
-    {
-      XR_LOG_WARN("ArmorDetector unknown PnP strategy %s", env);
-    }
-  }
-
-  diagnostics_.audit_every_frame =
-      parse_env_flag("ARMOR_DETECTOR_AUDIT_EVERY_FRAME");
-  diagnostics_.audit_zero_frames =
-      parse_env_flag("ARMOR_DETECTOR_AUDIT_ZERO_FRAMES");
-  diagnostics_.disable_traditional_refine =
-      parse_env_flag("XR_ARMOR_DETECTOR_DISABLE_TRADITIONAL_REFINE");
-  diagnostics_.dump_refine_fails =
-      parse_env_flag("XR_ARMOR_DETECTOR_DUMP_REFINE_FAILS");
-  if (diagnostics_.dump_refine_fails)
-  {
-    diagnostics_.dump_refine_fails_max =
-        parse_env_u32("XR_ARMOR_DETECTOR_DUMP_REFINE_FAILS_MAX", 12U);
-    if (const char* env = std::getenv("XR_ARMOR_DETECTOR_DUMP_REFINE_FAILS_DIR"))
-    {
-      if (env[0] != '\0')
-      {
-        diagnostics_.dump_refine_fails_dir = env;
-      }
-    }
-    if (diagnostics_.dump_refine_fails_dir.empty())
-    {
-      diagnostics_.dump_refine_fails_dir = "/tmp/xr_armor_refine_fails";
-    }
-    std::error_code ec;
-    std::filesystem::create_directories(diagnostics_.dump_refine_fails_dir, ec);
-    XR_LOG_INFO(
-        "ArmorDetector refine failure dump enabled: dir=%s max=%u create_ok=%d",
-        diagnostics_.dump_refine_fails_dir.c_str(),
-        diagnostics_.dump_refine_fails_max, ec ? 0 : 1);
-  }
 
   const char* model_path = ARMOR_DETECTOR_MODEL_PATH;
 
@@ -193,15 +58,10 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   }
 
   XR_LOG_INFO(
-      "ArmorDetector model=%s device=%s mode=%s input_scale=%.6f "
-      "point_order=%s refine_mode=%s pnp=%s model=%s",
-      detail::detector_model_name,
-      openvino_device, openvino_performance_mode, cfg_.network.input_scale,
-      detail::DirectKeypointPointOrderName(cfg_.network.direct_point_order),
-      detail::CornerRefineModeName(cfg_.traditional.refine_mode),
-      detail::PnpSolveStrategyName(cfg_.network.pnp_strategy), model_path);
-  network_.Configure(model_path, openvino_device, openvino_performance_mode,
-                     cfg_.network.input_scale);
+      "ArmorDetector model=%s device=%s mode=%s path=%s",
+      detail::detector_model_name, openvino_device, openvino_performance_mode,
+      model_path);
+  network_.Configure(model_path, openvino_device, openvino_performance_mode);
 }
 
 /**
@@ -250,11 +110,10 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   metrics_msg_.frame_index = frame_index_;
   metrics_msg_.image_timestamp_us = latest_timestamp_us_;
   metrics_msg_.decoded_count = counters_.decoded_count;
-  metrics_msg_.nms_count = counters_.nms_count;
+  metrics_msg_.overlap_kept_count = counters_.overlap_kept_count;
   metrics_msg_.semantic_kept_count = counters_.semantic_kept_count;
   metrics_msg_.armor_count = static_cast<uint32_t>(armors_packet_.results.size());
   metrics_msg_.pnp_success_count = counters_.pnp_success_count;
-  metrics_msg_.refined_count = counters_.refined_count;
   metrics_msg_.discarded_count = counters_.discarded_count;
   metrics_msg_.semantic_discard_count = counters_.semantic_discard_count;
   metrics_msg_.type_discard_count = counters_.type_discard_count;
@@ -271,8 +130,6 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   metrics_topic_.Publish(metrics_msg_);
 
   const uint32_t log_frame = detail::to_log_u32(metrics_msg_.frame_index);
-  const uint32_t log_timestamp_ms =
-      detail::to_log_u32(metrics_msg_.image_timestamp_us / 1000ULL);
   const uint32_t log_max_objectness_x1000 =
       detail::scaled_log_u32(metrics_msg_.max_objectness, 1000.0);
   const uint32_t log_detector_ms_x100 =
@@ -280,52 +137,14 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   const uint32_t log_publish_ms_x100 =
       detail::scaled_log_u32(metrics_msg_.publish_latency_ms, 100.0);
 
-  if (diagnostics_.audit_every_frame)
+  if ((frame_index_ % detail::metrics_log_period) == 0U)
   {
     XR_LOG_INFO(
-        "ArmorDetector audit frame=%u ts_ms=%u decoded=%u nms=%u semantic_kept=%u armors=%u",
-        log_frame, log_timestamp_ms,
-        metrics_msg_.decoded_count, metrics_msg_.nms_count,
-        metrics_msg_.semantic_kept_count, metrics_msg_.armor_count);
-    XR_LOG_INFO(
-        "ArmorDetector audit pnp=%u refined=%u semantic_discard=%u type_discard=%u discarded=%u max_obj_x1000=%u",
-        metrics_msg_.pnp_success_count, metrics_msg_.refined_count,
-        metrics_msg_.semantic_discard_count, metrics_msg_.type_discard_count,
-        metrics_msg_.discarded_count, log_max_objectness_x1000);
-    XR_LOG_INFO("ArmorDetector audit detector_ms_x100=%u publish_ms_x100=%u",
-                log_detector_ms_x100, log_publish_ms_x100);
-  }
-  else if (diagnostics_.audit_zero_frames && metrics_msg_.armor_count == 0U)
-  {
-    XR_LOG_WARN(
-        "ArmorDetector zero frame=%u ts_ms=%u decoded=%u nms=%u semantic_kept=%u pnp=%u",
-        log_frame, log_timestamp_ms,
-        metrics_msg_.decoded_count, metrics_msg_.nms_count,
-        metrics_msg_.semantic_kept_count, metrics_msg_.pnp_success_count);
-    XR_LOG_WARN(
-        "ArmorDetector zero refined=%u semantic_discard=%u type_discard=%u discarded=%u max_obj_x1000=%u",
-        metrics_msg_.refined_count, metrics_msg_.semantic_discard_count,
-        metrics_msg_.type_discard_count, metrics_msg_.discarded_count,
-        log_max_objectness_x1000);
-    XR_LOG_WARN("ArmorDetector zero detector_ms_x100=%u publish_ms_x100=%u",
-                log_detector_ms_x100, log_publish_ms_x100);
-  }
-  else if ((frame_index_ % detail::metrics_log_period) == 0U)
-  {
-    XR_LOG_INFO(
-        "ArmorDetector frame=%u armors=%u decoded=%u nms=%u semantic_kept=%u refined=%u",
+        "ArmorDetector frame=%u armors=%u decoded=%u overlap_kept=%u semantic_kept=%u pnp=%u",
         log_frame,
         metrics_msg_.armor_count, metrics_msg_.decoded_count,
-        metrics_msg_.nms_count, metrics_msg_.semantic_kept_count,
-        metrics_msg_.refined_count);
-    XR_LOG_INFO(
-        "ArmorDetector refine_attempt=%u fail_bbox=%u fail_roi=%u fail_l0=%u fail_l1=%u fail_pair=%u",
-        counters_.refine_attempt_count,
-        counters_.refine_fail_bbox_oob_count,
-        counters_.refine_fail_roi_empty_count,
-        counters_.refine_fail_lightbar_zero_count,
-        counters_.refine_fail_lightbar_one_count,
-        counters_.refine_fail_pair_distance_count);
+        metrics_msg_.overlap_kept_count, metrics_msg_.semantic_kept_count,
+        metrics_msg_.pnp_success_count);
     XR_LOG_INFO(
         "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj_x1000=%u detector_ms_x100=%u publish_ms_x100=%u",
         metrics_msg_.semantic_discard_count,

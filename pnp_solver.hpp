@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -17,38 +16,6 @@
 
 #include "CameraBase.hpp"
 #include "armor.hpp"
-
-namespace armor_detector_detail
-{
-
-/**
- * @brief PnP 求解策略。
- */
-enum class PnpSolveStrategy : uint8_t
-{
-  ROBUST = 0,   ///< IPPE 多候选 + ITERATIVE/EPNP fallback + LM refine。
-  IPPE_ONLY = 1, ///< 单次 IPPE 求解，不做 fallback/refine。
-};
-
-/**
- * @brief 查询 PnP 策略名称。
- * @param strategy PnP 策略。
- * @return 稳定日志名称。
- */
-inline const char* PnpSolveStrategyName(PnpSolveStrategy strategy)
-{
-  switch (strategy)
-  {
-    case PnpSolveStrategy::ROBUST:
-      return "robust";
-    case PnpSolveStrategy::IPPE_ONLY:
-      return "ippe_only";
-    default:
-      return "unknown";
-  }
-}
-
-}  // namespace armor_detector_detail
 
 /**
  * @brief 将装甲板四个图像角点求解为相机坐标系位姿。
@@ -92,9 +59,7 @@ class PnPSolver
   [[nodiscard]] bool SolvePnP(const std::array<cv::Point2f, 4>& image_armor_points,
                               ArmorType armor_type, cv::Mat& rvec,
                               cv::Mat& tvec,
-                              double* reprojection_error_px = nullptr,
-                              armor_detector_detail::PnpSolveStrategy strategy =
-                                  armor_detector_detail::PnpSolveStrategy::ROBUST) const;
+                              double* reprojection_error_px = nullptr) const;
 
   /**
    * @brief 计算图像点到相机主点的像素距离。
@@ -242,13 +207,12 @@ std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_m
 }
 
 /**
- * @brief 用 IPPE、ITERATIVE、EPNP 多候选求解并选择重投影误差最小的正深度解。
+ * @brief 使用 IPPE 求解装甲板平面位姿。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 bool PnPSolver<CameraInfoV>::SolvePnP(
     const std::array<cv::Point2f, 4>& image_armor_points, ArmorType armor_type,
-    cv::Mat& rvec, cv::Mat& tvec, double* reprojection_error_px,
-    armor_detector_detail::PnpSolveStrategy strategy) const
+    cv::Mat& rvec, cv::Mat& tvec, double* reprojection_error_px) const
 {
   if (reprojection_error_px != nullptr)
   {
@@ -261,165 +225,43 @@ bool PnPSolver<CameraInfoV>::SolvePnP(
 
   const auto& object_points =
       (armor_type == ArmorType::SMALL) ? small_armor_points_ : large_armor_points_;
-  constexpr std::array<int, 2> methods = {
-      cv::SOLVEPNP_ITERATIVE,
-      cv::SOLVEPNP_EPNP,
-  };
-  bool found = false;
-  double best_error = std::numeric_limits<double>::infinity();
   const std::vector<cv::Point2f> image_points = {
       base_points[0], base_points[1], base_points[2], base_points[3]};
 
-  if (strategy == armor_detector_detail::PnpSolveStrategy::IPPE_ONLY)
+  cv::Mat candidate_rvec;
+  cv::Mat candidate_tvec;
+  if (!cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
+                    candidate_rvec, candidate_tvec, false, cv::SOLVEPNP_IPPE))
   {
-    cv::Mat candidate_rvec;
-    cv::Mat candidate_tvec;
-    if (!cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
-                      candidate_rvec, candidate_tvec, false, cv::SOLVEPNP_IPPE))
-    {
-      return false;
-    }
-
-    if (candidate_rvec.empty() || candidate_tvec.empty())
-    {
-      return false;
-    }
-
-    const double z = candidate_tvec.at<double>(2);
-    if (!std::isfinite(z) || z <= 1e-6)
-    {
-      return false;
-    }
-
-    const double reprojection_error =
-        ComputeReprojectionError(object_points, image_points, camera_matrix_,
-                                 dist_coeffs_, candidate_rvec, candidate_tvec);
-    if (!std::isfinite(reprojection_error))
-    {
-      return false;
-    }
-
-    rvec = candidate_rvec;
-    tvec = candidate_tvec;
-    if (reprojection_error_px != nullptr)
-    {
-      *reprojection_error_px = reprojection_error;
-    }
-    return true;
+    return false;
   }
 
+  if (candidate_rvec.empty() || candidate_tvec.empty())
   {
-    std::vector<cv::Mat> candidate_rvecs;
-    std::vector<cv::Mat> candidate_tvecs;
-    if (cv::solvePnPGeneric(object_points, image_points, camera_matrix_, dist_coeffs_,
-                            candidate_rvecs, candidate_tvecs, false,
-                            cv::SOLVEPNP_IPPE) > 0)
-    {
-      for (std::size_t candidate_index = 0;
-           candidate_index < candidate_rvecs.size() &&
-           candidate_index < candidate_tvecs.size();
-           ++candidate_index)
-      {
-        const auto& candidate_rvec = candidate_rvecs[candidate_index];
-        const auto& candidate_tvec = candidate_tvecs[candidate_index];
-        if (candidate_rvec.empty() || candidate_tvec.empty())
-        {
-          continue;
-        }
-
-        const double z = candidate_tvec.at<double>(2);
-        if (!std::isfinite(z) || z <= 1e-6)
-        {
-          continue;
-        }
-
-        const double reprojection_error =
-            ComputeReprojectionError(object_points, image_points, camera_matrix_,
-                                     dist_coeffs_, candidate_rvec, candidate_tvec);
-        if (!std::isfinite(reprojection_error))
-        {
-          continue;
-        }
-        if (!found || reprojection_error < best_error)
-        {
-          found = true;
-          best_error = reprojection_error;
-          rvec = candidate_rvec.clone();
-          tvec = candidate_tvec.clone();
-        }
-      }
-    }
+    return false;
   }
 
-  for (const int method : methods)
+  const double z = candidate_tvec.at<double>(2);
+  if (!std::isfinite(z) || z <= 1e-6)
   {
-    cv::Mat candidate_rvec;
-    cv::Mat candidate_tvec;
-    if (!cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
-                      candidate_rvec, candidate_tvec, false, method))
-    {
-      continue;
-    }
-
-    if (candidate_rvec.empty() || candidate_tvec.empty())
-    {
-      continue;
-    }
-
-    const double z = candidate_tvec.at<double>(2);
-    if (!std::isfinite(z) || z <= 1e-6)
-    {
-      continue;
-    }
-
-    const double reprojection_error =
-        ComputeReprojectionError(object_points, image_points, camera_matrix_,
-                                 dist_coeffs_, candidate_rvec, candidate_tvec);
-    if (!std::isfinite(reprojection_error))
-    {
-      continue;
-    }
-    if (!found || reprojection_error < best_error)
-    {
-      found = true;
-      best_error = reprojection_error;
-      rvec = candidate_rvec;
-      tvec = candidate_tvec;
-    }
+    return false;
   }
 
-#if (CV_VERSION_MAJOR > 4) || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 1)
-  if (found)
+  const double reprojection_error =
+      ComputeReprojectionError(object_points, image_points, camera_matrix_,
+                               dist_coeffs_, candidate_rvec, candidate_tvec);
+  if (!std::isfinite(reprojection_error))
   {
-    cv::Mat refined_rvec = rvec.clone();
-    cv::Mat refined_tvec = tvec.clone();
-    try
-    {
-      cv::solvePnPRefineLM(object_points, image_points, camera_matrix_, dist_coeffs_,
-                           refined_rvec, refined_tvec);
-      const double refined_z = refined_tvec.at<double>(2);
-      const double refined_error =
-          ComputeReprojectionError(object_points, image_points, camera_matrix_,
-                                   dist_coeffs_, refined_rvec, refined_tvec);
-      if (std::isfinite(refined_z) && refined_z > 1e-6 &&
-          std::isfinite(refined_error) && refined_error <= best_error)
-      {
-        best_error = refined_error;
-        rvec = refined_rvec;
-        tvec = refined_tvec;
-      }
-    }
-    catch (const cv::Exception&)
-    {
-    }
+    return false;
   }
-#endif
 
-  if (found && reprojection_error_px != nullptr)
+  rvec = candidate_rvec;
+  tvec = candidate_tvec;
+  if (reprojection_error_px != nullptr)
   {
-    *reprojection_error_px = best_error;
+    *reprojection_error_px = reprojection_error;
   }
-  return found;
+  return true;
 }
 
 /**

@@ -2,31 +2,20 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: 基于 OpenVINO 的装甲板检测、可选角点细化和 PnP 位姿估计
+module_description: 基于 OpenVINO 的装甲板检测和 PnP 位姿估计
 constructor_args:
   cfg:
     detect_color: 1
-    traditional:
-      threshold: 150.0
-      max_angle_error_deg: 45.0
-      min_lightbar_ratio: 1.5
-      max_lightbar_ratio: 20.0
-      min_lightbar_length: 8.0
-      refine_mode: detail::CornerRefineMode::PAIR_ROI
     network:
       use_roi: false
       roi_x: 420
       roi_y: 50
       roi_width: 600
       roi_height: 600
-      use_traditional_refine: false
       score_threshold: 0.1
       min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
-      direct_point_order: detail::DirectKeypointPointOrder::DECLARED_ORDER
-      pnp_strategy: detail::PnpSolveStrategy::IPPE_ONLY
-      input_scale: 255.0
       openvino_device: "AUTO_DETECT"
       openvino_performance_mode: "LATENCY"
   sync: '@camera_frame_sync'
@@ -56,15 +45,9 @@ depends:
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
 #include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
-#include <system_error>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -92,9 +75,9 @@ depends:
 /**
  * @brief 装甲板检测应用模块。
  *
- * ArmorDetector 从 CameraFrameSync 读取已经对齐的图像/IMU 帧，执行网络关键点
- * 检测、可选传统灯条细化、语义过滤、尺寸类型判断和 PnP 位姿求解，最后向
- * `armor_detector` domain 发布检测结果、带原始帧引用的结果和运行指标。
+ * ArmorDetector 从 CameraFrameSync 读取已经对齐的图像/IMU 帧，执行 dense-grid
+ * keypoint 检测、语义过滤、尺寸类型判断和 PnP 位姿求解，最后向 `armor_detector`
+ * domain 发布检测结果、带原始帧引用的结果和运行指标。
  *
  * @tparam CameraInfoV 编译期相机参数，必须与实际图像尺寸、内参和编码一致。
  */
@@ -122,20 +105,6 @@ class ArmorDetector : public LibXR::Application
   static inline constexpr CameraInfo camera_info = CameraInfoV;
 
   /**
-   * @brief 传统灯条细化参数。
-   */
-  struct TraditionalParams
-  {
-    double threshold{150.0};              ///< 二值化阈值。
-    double max_angle_error_deg{45.0};     ///< 灯条相对竖直方向最大角度误差，单位 deg。
-    double min_lightbar_ratio{1.5};       ///< 灯条长宽比下限。
-    double max_lightbar_ratio{20.0};      ///< 灯条长宽比上限。
-    double min_lightbar_length{8.0};      ///< 灯条最小长度，单位 px。
-    /// 传统角点细化策略。
-    detail::CornerRefineMode refine_mode{detail::CornerRefineMode::PAIR_ROI};
-  };
-
-  /**
    * @brief 网络 detector 和后处理参数。
    */
   struct NetworkParams
@@ -145,18 +114,10 @@ class ArmorDetector : public LibXR::Application
     int roi_y{50};                       ///< ROI 左上角 y。
     int roi_width{600};                  ///< ROI 宽度；负值表示全图宽度。
     int roi_height{600};                 ///< ROI 高度；负值表示全图高度。
-    bool use_traditional_refine{false};  ///< 是否启用传统灯条角点细化。
     double score_threshold{0.1};         ///< 网络目标置信度门限。
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
-    /// dense-grid 角点输出转 detector 统一顺序的策略。
-    detail::DirectKeypointPointOrder direct_point_order{
-        detail::DirectKeypointPointOrder::DECLARED_ORDER};
-    /// PnP 求解策略。
-    detail::PnpSolveStrategy pnp_strategy{detail::PnpSolveStrategy::IPPE_ONLY};
-    /// OpenVINO preprocessor 输入缩放因子；255.0 表示 /255，1.0 表示不缩放。
-    double input_scale{255.0};
     /// OpenVINO 编译设备；"AUTO_DETECT" 按 NPU、GPU、CPU 顺序自动选择。
     const char* openvino_device{"AUTO_DETECT"};
     /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
@@ -169,7 +130,6 @@ class ArmorDetector : public LibXR::Application
   struct Config
   {
     int detect_color{1};                 ///< 0=红色，1=蓝色，其他=不限制颜色。
-    TraditionalParams traditional{};     ///< 传统灯条细化参数。
     NetworkParams network{};             ///< 网络 detector 参数。
   };
 
@@ -196,29 +156,9 @@ class ArmorDetector : public LibXR::Application
 
  private:
   /**
-   * @brief 传统图像处理中拟合出的单条灯条。
-   */
-  struct Lightbar
-  {
-    std::size_t id{0};                    ///< 当前 ROI 内的调试编号。
-    ArmorColor color{ArmorColor::UNKNOWN}; ///< 由轮廓像素估计的灯条颜色。
-    cv::RotatedRect rect{};               ///< OpenCV 最小外接旋转矩形。
-    cv::Point2f center{};                 ///< 灯条中心。
-    cv::Point2f top{};                    ///< 沿拟合线投影得到的上端点。
-    cv::Point2f bottom{};                 ///< 沿拟合线投影得到的下端点。
-    cv::Point2f top_to_bottom{};          ///< top 到 bottom 的方向向量。
-    double angle{0.0};                    ///< 灯条方向角，单位 rad。
-    double angle_error{0.0};              ///< 相对竖直方向的角度误差，单位 rad。
-    double length{0.0};                   ///< 灯条长度，单位 px。
-    double width{0.0};                    ///< 灯条宽度，单位 px。
-    double ratio{0.0};                    ///< 灯条长宽比。
-    double fill_ratio{0.0};               ///< 轮廓像素数与旋转矩形面积的比值。
-  };
-
-  /**
    * @brief detector 内部装甲板候选。
    *
-   * 候选已经经过网络解码，可进一步被传统灯条细化和尺寸类型判定，最后再转为
+   * 候选已经经过网络解码，可进一步做尺寸类型判定，最后再转为
    * ArmorDetectorResult。
    */
   struct CandidateArmor
@@ -229,9 +169,6 @@ class ArmorDetector : public LibXR::Application
     float confidence{0.0F};                    ///< 网络置信度。
     cv::Rect box{};                            ///< 当前候选包围盒。
     std::array<cv::Point2f, 4> points{};       ///< 当前角点，顺序为左上、右上、右下、左下。
-    bool raw_points_valid{false};              ///< raw_points 是否有效。
-    bool refined{false};                       ///< 当前 points 是否经过传统细化。
-    std::array<cv::Point2f, 4> raw_points{};   ///< 网络原始角点。
     cv::Point2f center{};                      ///< 候选像素中心。
     cv::Point2f center_norm{};                 ///< 宽高归一化中心。
     double ratio{0.0};                         ///< 左右灯条中心距与灯条长度的比例。
@@ -240,7 +177,7 @@ class ArmorDetector : public LibXR::Application
   /**
    * @brief 网络输出解码后的最小语义单元。
    *
-   * 该结构不包含传统细化、尺寸类型判定和 PnP 结果。
+   * 该结构不包含尺寸类型判定和 PnP 结果。
    */
   struct NetworkDetection
   {
@@ -267,34 +204,13 @@ class ArmorDetector : public LibXR::Application
   struct FrameCounters
   {
     uint32_t decoded_count{0};                 ///< 网络 decoder 保留候选数量。
-    uint32_t nms_count{0};                     ///< NMS 后候选数量。
+    uint32_t overlap_kept_count{0};            ///< 交叠抑制后候选数量。
     uint32_t semantic_kept_count{0};           ///< 语义过滤后候选数量。
     uint32_t pnp_success_count{0};             ///< PnP 成功数量。
-    uint32_t refined_count{0};                 ///< 角点细化成功数量。
-    uint32_t refine_attempt_count{0};          ///< 角点细化尝试数量。
-    uint32_t refine_fail_bbox_oob_count{0};    ///< 细化 ROI 越界失败数量。
-    uint32_t refine_fail_roi_empty_count{0};   ///< 细化 ROI 空图失败数量。
-    uint32_t refine_fail_lightbar_zero_count{0}; ///< 细化时未找到灯条数量。
-    uint32_t refine_fail_lightbar_one_count{0}; ///< 细化时只找到单灯条数量。
-    uint32_t refine_fail_pair_distance_count{0}; ///< 细化时无法匹配灯条对数量。
     uint32_t discarded_count{0};               ///< 后处理丢弃候选总数。
     uint32_t semantic_discard_count{0};        ///< 语义过滤丢弃数量。
     uint32_t type_discard_count{0};            ///< 类型一致性过滤丢弃数量。
     double max_objectness{0.0};                ///< 本帧最大网络置信度。
-  };
-
-  /**
-   * @brief 通过环境变量开启的诊断选项。
-   */
-  struct DiagnosticOptions
-  {
-    bool audit_every_frame{false};             ///< 是否每帧打印完整 audit 日志。
-    bool audit_zero_frames{false};             ///< 是否只在零检测帧打印 audit 日志。
-    bool disable_traditional_refine{false};    ///< 是否强制关闭传统角点细化。
-    bool dump_refine_fails{false};             ///< 是否保存细化失败调试图。
-    std::string dump_refine_fails_dir{};       ///< 细化失败调试文件目录。
-    uint32_t dump_refine_fails_max{12};        ///< 单进程最大细化失败 dump 数。
-    uint32_t dump_refine_fails_count{0};       ///< 已保存 dump 数。
   };
 
   /**
@@ -317,7 +233,7 @@ class ArmorDetector : public LibXR::Application
   static void SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self);
 
   /**
-   * @brief 对单帧 BGR 图像执行网络检测、后处理和可选细化。
+   * @brief 对单帧 BGR 图像执行网络检测和后处理。
    * @param bgr_img 输入 BGR 图像。
    * @return 本帧有效装甲板候选。
    */
@@ -333,7 +249,7 @@ class ArmorDetector : public LibXR::Application
                             detail::NetworkInputMapping& mapping) const;
 
   /**
-   * @brief 解码网络输出并执行 NMS、语义过滤、细化和类型判定。
+   * @brief 解码网络输出并执行交叠抑制、语义过滤和类型判定。
    * @param mapping 网络输入到源图像的坐标映射。
    * @param output 网络输出矩阵。
    * @param bgr_img detector 源图像。
@@ -371,71 +287,6 @@ class ArmorDetector : public LibXR::Application
                                      const cv::Mat& bgr_img) const;
 
   /**
-   * @brief 构建传统灯条细化使用的二值图。
-   * @param bgr_img 输入 BGR 图像。
-   * @param target_color 目标颜色；UNKNOWN 表示使用红蓝差分强度。
-   * @return 单通道二值图。
-   */
-  cv::Mat BuildTraditionalBinary(const cv::Mat& bgr_img,
-                                 ArmorColor target_color) const;
-
-  /**
-   * @brief 使用传统灯条检测结果细化候选角点。
-   * @param armor 待细化候选，成功时会原地更新角点/中心/box。
-   * @param bgr_img detector 源图像。
-   * @return 找到匹配灯条对并更新角点时返回 true。
-   */
-  bool RefineArmorCorners(CandidateArmor& armor, const cv::Mat& bgr_img);
-
-  /**
-   * @brief 当前实现的单 ROI 灯条对角点细化。
-   * @param armor 待细化候选，成功时会原地更新角点/中心/box。
-   * @param bgr_img detector 源图像。
-   * @return 找到匹配灯条对并更新角点时返回 true。
-   */
-  bool RefineArmorCornersPairRoi(CandidateArmor& armor, const cv::Mat& bgr_img);
-
-  /**
-   * @brief 左右分 ROI 加权选择灯条的源参考角点细化。
-   * @param armor 待细化候选，成功时会原地更新角点/中心/box。
-   * @param bgr_img detector 源图像。
-   * @return 左右灯条均匹配并通过最终一致性检查时返回 true。
-   */
-  bool RefineArmorCornersSplitRoiWeighted(CandidateArmor& armor,
-                                          const cv::Mat& bgr_img);
-
-  /**
-   * @brief 在诊断开关开启时保存角点细化失败现场。
-   * @param reason 失败原因标签。
-   * @param armor 细化前候选。
-   * @param bounding_box 细化 ROI 在源图像中的包围盒。
-   * @param armor_roi 细化 ROI 图像。
-   * @param binary_img 细化二值图。
-   * @param lightbars ROI 内已检测灯条。
-   */
-  void MaybeDumpRefineFailure(const char* reason, const CandidateArmor& armor,
-                              const cv::Rect& bounding_box,
-                              const cv::Mat& armor_roi,
-                              const cv::Mat& binary_img,
-                              const std::vector<Lightbar>& lightbars);
-
-  /**
-   * @brief 在二值图中检测并拟合灯条。
-   * @param bgr_img 与 binary_img 对齐的 BGR 图像。
-   * @param binary_img 单通道二值图。
-   * @return 通过基础几何检查的灯条列表，按 x 坐标排序。
-   */
-  std::vector<Lightbar> DetectLightbars(const cv::Mat& bgr_img,
-                                        const cv::Mat& binary_img) const;
-
-  /**
-   * @brief 检查灯条角度、长宽比和长度是否合理。
-   * @param lightbar 待检查灯条。
-   * @return 通过几何门限时返回 true。
-   */
-  bool ValidateLightbar(const Lightbar& lightbar) const;
-
-  /**
    * @brief 检查候选编号先验与尺寸类型是否冲突。
    * @param armor 待检查候选。
    * @return 无冲突时返回 true。
@@ -465,15 +316,6 @@ class ArmorDetector : public LibXR::Application
                                   const cv::Point2f& center) const;
 
   /**
-   * @brief 根据轮廓内红蓝通道强度估计灯条颜色。
-   * @param bgr_img BGR 图像。
-   * @param contour 轮廓点。
-   * @return 红蓝通道和更大的颜色。
-   */
-  ArmorColor GetContourColor(const cv::Mat& bgr_img,
-                             const std::vector<cv::Point>& contour) const;
-
-  /**
    * @brief 将内部候选转换成 Topic 结果包并执行 PnP。
    * @param armors 内部候选列表。
    * @param bgr_img 源图像。
@@ -489,7 +331,6 @@ class ArmorDetector : public LibXR::Application
   uint64_t frame_index_{0};              ///< 已处理帧计数。
   LibXR::Thread sync_frame_thread_{};    ///< 后台同步帧消费线程。
   FrameCounters counters_{};             ///< 当前帧内部计数器。
-  DiagnosticOptions diagnostics_{};      ///< 环境变量控制的诊断选项。
   detail::OpenVinoArmorNetwork network_{}; ///< OpenVINO 网络封装。
 
   ArmorDetectionsPacket armors_packet_{}; ///< 复用的检测结果包。

@@ -32,17 +32,15 @@ class OpenVinoArmorNetwork
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
-   * @param input_scale 输入缩放因子；255.0 表示把 u8 输入归一化到 0..1。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
   bool Configure(const char* model_path, const char* device_name,
-                 const char* performance_mode, double input_scale)
+                 const char* performance_mode)
   {
     requested_device_name_ = NormalizeDeviceName(device_name);
     available_device_names_ = QueryAvailableDeviceNames();
     device_name_ = ResolveDeviceName(requested_device_name_);
     performance_mode_name_ = NormalizePerformanceModeName(performance_mode);
-    input_scale_ = NormalizeInputScale(input_scale);
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
@@ -65,10 +63,7 @@ class OpenVinoArmorNetwork
       auto& preprocess = input.preprocess();
       preprocess.convert_element_type(ov::element::f32);
       preprocess.convert_color(ov::preprocess::ColorFormat::RGB);
-      if (std::abs(input_scale_ - 1.0) > 1e-9)
-      {
-        preprocess.scale(input_scale_);
-      }
+      preprocess.scale(255.0);
 
       model = post_processor.build();
       compiled_model_ = ov_core_.compile_model(
@@ -79,10 +74,9 @@ class OpenVinoArmorNetwork
       model_ready_ = true;
       XR_LOG_PASS(
           "ArmorDetector loaded %s model on OpenVINO device %s requested %s "
-          "mode %s input_scale %.6f",
+          "mode %s",
           detector_model_name, device_name_.c_str(),
-          requested_device_name_.c_str(), performance_mode_name_.c_str(),
-          input_scale_);
+          requested_device_name_.c_str(), performance_mode_name_.c_str());
       return true;
     }
     catch (const std::exception& exception)
@@ -190,20 +184,6 @@ class OpenVinoArmorNetwork
       return "AUTO_DETECT";
     }
     return device_name;
-  }
-
-  /**
-   * @brief 归一化输入缩放因子。
-   * @param input_scale 外部配置值。
-   * @return 正有限值；非法值回退 255.0。
-   */
-  static double NormalizeInputScale(double input_scale)
-  {
-    if (!std::isfinite(input_scale) || input_scale <= 0.0)
-    {
-      return 255.0;
-    }
-    return input_scale;
   }
 
   /**
@@ -321,17 +301,16 @@ class OpenVinoArmorNetwork
     {
       XR_LOG_WARN(
           "ArmorDetector OpenVINO CPU-only runtime; available=%s requested=%s "
-          "resolved=%s mode=%s input_scale=%.6f",
+          "resolved=%s mode=%s",
           available_devices_text.c_str(), requested_device_name_.c_str(),
-          device_name_.c_str(), performance_mode_name_.c_str(), input_scale_);
+          device_name_.c_str(), performance_mode_name_.c_str());
       return;
     }
 
     XR_LOG_INFO(
-        "ArmorDetector OpenVINO devices=%s requested=%s resolved=%s mode=%s "
-        "input_scale=%.6f",
+        "ArmorDetector OpenVINO devices=%s requested=%s resolved=%s mode=%s",
         available_devices_text.c_str(), requested_device_name_.c_str(),
-        device_name_.c_str(), performance_mode_name_.c_str(), input_scale_);
+        device_name_.c_str(), performance_mode_name_.c_str());
   }
 
   /**
@@ -379,7 +358,6 @@ class OpenVinoArmorNetwork
   std::string requested_device_name_{"AUTO_DETECT"};                 ///< 配置请求设备。
   std::string device_name_{"CPU"};                                   ///< OpenVINO 编译设备。
   std::string performance_mode_name_{"LATENCY"};                     ///< OpenVINO 性能模式。
-  double input_scale_{255.0};                                        ///< 输入缩放因子。
   bool model_ready_{false};                                         ///< 模型是否可用。
   NetworkInputShape input_shape_{};                                 ///< 当前模型输入宽高。
   ov::Core ov_core_{};                                               ///< OpenVINO runtime core。

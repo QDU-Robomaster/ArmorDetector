@@ -8,7 +8,7 @@
  * header-only template 实例化能力。
  */
 
+#include "ArmorDetectorGeometry.hpp"
 #include "ArmorDetectorRuntime.hpp"
 #include "ArmorDetectorInference.hpp"
-#include "ArmorDetectorRefine.hpp"
 #include "ArmorDetectorPublish.hpp"

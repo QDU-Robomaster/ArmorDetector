@@ -9,7 +9,7 @@
  * @brief 对单帧图像执行网络 detector 主流程。
  *
  * 该函数负责 ROI 裁剪、网络输入构建、OpenVINO 推理、输出解码和 ROI 坐标还原。
- * 传统角点细化和语义过滤在 DecodeOutput() 内完成。
+ * 语义过滤和尺寸类型判定在 DecodeOutput() 内完成。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param raw_img 输入 BGR 图像。
@@ -20,10 +20,9 @@ std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
 ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
 {
   counters_.decoded_count = 0U;
-  counters_.nms_count = 0U;
+  counters_.overlap_kept_count = 0U;
   counters_.semantic_kept_count = 0U;
   counters_.pnp_success_count = 0U;
-  counters_.refined_count = 0U;
   counters_.discarded_count = 0U;
   counters_.semantic_discard_count = 0U;
   counters_.type_discard_count = 0U;
@@ -138,8 +137,8 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
 /**
  * @brief 将网络输出矩阵转换成内部装甲板候选。
  *
- * 输出先解码为 NetworkDetection，再执行交叠抑制、颜色/编号/置信度过滤、
- * 可选传统角点细化和尺寸类型一致性检查。
+ * 输出先解码为 NetworkDetection，再执行交叠抑制、颜色/编号/置信度过滤和
+ * 尺寸类型一致性检查。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param mapping 网络输入到 detector 图像的坐标映射。
@@ -192,7 +191,7 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   }
 
   const std::vector<int> indices = SelectDetectionsAfterOverlapSuppression(detections);
-  counters_.nms_count = static_cast<uint32_t>(indices.size());
+  counters_.overlap_kept_count = static_cast<uint32_t>(indices.size());
 
   std::vector<CandidateArmor> armors;
   armors.reserve(indices.size());
@@ -212,15 +211,6 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
       continue;
     }
     ++counters_.semantic_kept_count;
-
-    if (cfg_.network.use_traditional_refine &&
-        !diagnostics_.disable_traditional_refine)
-    {
-      if (RefineArmorCorners(armor, bgr_img))
-      {
-        ++counters_.refined_count;
-      }
-    }
 
     if (ArmorNumberIsLarge(armor.number))
     {
@@ -346,7 +336,7 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
       detail::DirectKeypointOutputLayout::number_end);
 
   const auto cell = detail::DirectKeypointGridCellForRow(row);
-  std::array<cv::Point2f, 4> raw_points{};
+  std::array<cv::Point2f, 4> declared_points{};
   for (int point_index = 0; point_index < 4; ++point_index)
   {
     const float x =
@@ -361,15 +351,13 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
                              point_index * 2 + 1) *
             static_cast<float>(cell.stride * 2) +
         static_cast<float>(cell.center_y);
-    raw_points[static_cast<std::size_t>(point_index)] = mapping.MapToSource(x, y);
+    declared_points[static_cast<std::size_t>(point_index)] =
+        mapping.MapToSource(x, y);
   }
 
-  std::swap(raw_points[2], raw_points[3]);
+  std::swap(declared_points[2], declared_points[3]);
   const auto points =
-      (cfg_.network.direct_point_order ==
-       detail::DirectKeypointPointOrder::DECLARED_ORDER)
-          ? detail::direct_keypoint_declared_to_canonical(raw_points)
-          : detail::sort_keypoints(raw_points);
+      detail::direct_keypoint_declared_to_canonical(declared_points);
   if (cfg_.network.enable_quad_check &&
       !detail::IsUsableQuad(points, cfg_.network.min_quad_area_px))
   {
@@ -388,7 +376,7 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
 /**
  * @brief 从网络检测单元创建内部候选。
  *
- * 候选会保留网络原始角点，并立即计算中心、归一化中心和尺寸比例等几何派生量。
+ * 候选会立即计算中心、归一化中心和尺寸比例等几何派生量。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param detection 网络检测单元。
@@ -406,8 +394,6 @@ ArmorDetector<CameraInfoV>::BuildCandidateArmor(
   armor.confidence = detection.confidence;
   armor.box = detection.box;
   armor.points = detection.points;
-  armor.raw_points_valid = true;
-  armor.raw_points = detection.points;
   armor.center = detail::quad_center(armor.points);
   armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
   UpdateGeometryMetrics(armor);

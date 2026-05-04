@@ -8,7 +8,7 @@
 /**
  * @brief 将内部候选填充为对外 detector 结果包。
  *
- * 每个候选都会复制语义、2D 几何和细化状态，并使用模块相机参数执行 PnP。
+ * 每个候选都会复制语义和 2D 几何，并使用模块相机参数执行 PnP。
  * PnP 成功时 pose、pnp_valid 和 pnp_reprojection_error_px 才有效。
  *
  * @tparam CameraInfoV 编译期相机参数。
@@ -33,9 +33,6 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
     result.confidence = armor.confidence;
     result.box = armor.box;
     result.points = armor.points;
-    result.raw_points_valid = armor.raw_points_valid;
-    result.refined = armor.refined;
-    result.raw_points = armor.raw_points;
     result.center = armor.center;
     result.center_norm = GetNormalizedCenter(bgr_img, armor.center);
     result.distance_to_image_center = pnp_solver_.CalculateDistanceToCenter(armor.center);
@@ -44,8 +41,7 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
     cv::Mat tvec;
     double pnp_reprojection_error_px = 0.0;
     if (pnp_solver_.SolvePnP(armor.points, armor.type, rvec, tvec,
-                             &pnp_reprojection_error_px,
-                             cfg_.network.pnp_strategy))
+                             &pnp_reprojection_error_px))
     {
       result.pnp_valid = true;
       result.pnp_reprojection_error_px = pnp_reprojection_error_px;

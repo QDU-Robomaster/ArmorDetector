@@ -14,11 +14,6 @@ namespace armor_detector_detail
 {
 
 /**
- * @brief 角度到弧度的换算系数。
- */
-constexpr double deg2rad = CV_PI / 180.0;
-
-/**
  * @brief dense-grid keypoint detector 输入宽度。
  */
 constexpr int direct_keypoint_input_width = 640;
@@ -71,60 +66,6 @@ struct NetworkInputShape
   int width{direct_keypoint_input_width};   ///< 输入宽度，单位 px。
   int height{direct_keypoint_input_height}; ///< 输入高度，单位 px。
 };
-
-/**
- * @brief dense-grid keypoint 输出角点转 detector 统一角点的策略。
- */
-enum class DirectKeypointPointOrder : uint8_t
-{
-  CANONICAL_SORT = 0, ///< 按像素几何排序为左上、右上、右下、左下。
-  DECLARED_ORDER = 1, ///< 信任模型声明顺序，仅做固定下标重排。
-};
-
-/**
- * @brief 传统角点细化策略。
- */
-enum class CornerRefineMode : uint8_t
-{
-  PAIR_ROI = 0,        ///< 当前实现：一个装甲板 ROI 内找灯条对。
-  SPLIT_ROI_WEIGHTED = 1, ///< 源参考实现：左右灯条分 ROI 并加权选择。
-};
-
-/**
- * @brief 查询 dense-grid 角点顺序策略名称。
- * @param order 角点顺序策略。
- * @return 稳定日志名称。
- */
-inline const char* DirectKeypointPointOrderName(DirectKeypointPointOrder order)
-{
-  switch (order)
-  {
-    case DirectKeypointPointOrder::CANONICAL_SORT:
-      return "canonical_sort";
-    case DirectKeypointPointOrder::DECLARED_ORDER:
-      return "declared_order";
-    default:
-      return "unknown";
-  }
-}
-
-/**
- * @brief 查询传统角点细化策略名称。
- * @param mode 细化策略。
- * @return 稳定日志名称。
- */
-inline const char* CornerRefineModeName(CornerRefineMode mode)
-{
-  switch (mode)
-  {
-    case CornerRefineMode::PAIR_ROI:
-      return "pair_roi";
-    case CornerRefineMode::SPLIT_ROI_WEIGHTED:
-      return "split_roi_weighted";
-    default:
-      return "unknown";
-  }
-}
 
 /**
  * @brief 网络输入坐标到原始 detector 图像坐标的映射。
@@ -467,38 +408,6 @@ inline ArmorNumber number_from_direct_keypoint_class_id(int class_id)
     default:
       return ArmorNumber::UNKNOWN;
   }
-}
-
-/**
- * @brief 将任意四个角点排序为 detector/PnP 统一顺序。
- * @param keypoints 输入四点。
- * @return 左上、右上、右下、左下顺序的四点。
- */
-inline std::array<cv::Point2f, 4> sort_keypoints(
-    const std::array<cv::Point2f, 4>& keypoints)
-{
-  std::array<cv::Point2f, 4> sorted = keypoints;
-
-  std::sort(sorted.begin(), sorted.end(),
-            [](const cv::Point2f& lhs, const cv::Point2f& rhs)
-            {
-              return lhs.y < rhs.y;
-            });
-
-  std::array<cv::Point2f, 2> top_points = {sorted[0], sorted[1]};
-  std::array<cv::Point2f, 2> bottom_points = {sorted[2], sorted[3]};
-  std::sort(top_points.begin(), top_points.end(),
-            [](const cv::Point2f& lhs, const cv::Point2f& rhs)
-            {
-              return lhs.x < rhs.x;
-            });
-  std::sort(bottom_points.begin(), bottom_points.end(),
-            [](const cv::Point2f& lhs, const cv::Point2f& rhs)
-            {
-              return lhs.x < rhs.x;
-            });
-
-  return {top_points[0], top_points[1], bottom_points[1], bottom_points[0]};
 }
 
 /**
