@@ -99,7 +99,7 @@ class OpenVinoArmorNetwork
   }
 
  private:
-  DetectorProfile profile_{DetectorProfile::SP_YOLOV5};
+  DetectorProfile profile_{DetectorProfile::YOLO_KEYPOINT_640X640};
   bool model_ready_{false};
   NetworkInputShape input_shape_{};
   ov::Core ov_core_{};

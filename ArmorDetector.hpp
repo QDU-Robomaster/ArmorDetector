@@ -24,7 +24,7 @@ constructor_args:
       min_confidence: 0.8
       enable_quad_check: true
       min_quad_area_px: 16.0
-      model_profile: detail::DetectorProfile::SP_YOLOV5
+      model_profile: detail::DetectorProfile::YOLO_KEYPOINT_640X640
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -74,13 +74,13 @@ depends:
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
 
-#ifndef ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH
-#define ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH ARMOR_DETECTOR_MODEL_PATH
+#ifndef ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH
+#define ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH ARMOR_DETECTOR_MODEL_PATH
 #endif
 
-#ifndef ARMOR_DETECTOR_SHTECH_SZU0526_MODEL_PATH
-#define ARMOR_DETECTOR_SHTECH_SZU0526_MODEL_PATH \
-  ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH
+#ifndef ARMOR_DETECTOR_DIRECT_KEYPOINT_MODEL_PATH
+#define ARMOR_DETECTOR_DIRECT_KEYPOINT_MODEL_PATH \
+  ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH
 #endif
 
 template <CameraTypes::CameraInfo CameraInfoV>
@@ -120,7 +120,7 @@ class ArmorDetector : public LibXR::Application
     double min_confidence{0.8};
     bool enable_quad_check{true};
     double min_quad_area_px{16.0};
-    DetectorProfile model_profile{DetectorProfile::SP_YOLOV5};
+    DetectorProfile model_profile{DetectorProfile::YOLO_KEYPOINT_640X640};
   };
 
   struct Config
@@ -226,9 +226,9 @@ class ArmorDetector : public LibXR::Application
       const cv::Mat& bgr_img);
   std::optional<NetworkDetection> DecodeNetworkDetection(
       const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
-  std::optional<NetworkDetection> DecodeSpYoloDetection(
+  std::optional<NetworkDetection> DecodeYoloKeypointDetection(
       const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
-  std::optional<NetworkDetection> DecodeShtechSzu0526Detection(
+  std::optional<NetworkDetection> DecodeDirectKeypointDetection(
       const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
   CandidateArmor BuildCandidateArmor(const NetworkDetection& detection,
                                      const cv::Mat& bgr_img) const;

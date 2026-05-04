@@ -268,10 +268,10 @@ ArmorDetector<CameraInfoV>::DecodeNetworkDetection(
 {
   switch (cfg_.yolo.model_profile)
   {
-    case DetectorProfile::SP_YOLOV5:
-      return DecodeSpYoloDetection(mapping, output, row);
-    case DetectorProfile::SHTECH_SZU0526:
-      return DecodeShtechSzu0526Detection(mapping, output, row);
+    case DetectorProfile::YOLO_KEYPOINT_640X640:
+      return DecodeYoloKeypointDetection(mapping, output, row);
+    case DetectorProfile::DIRECT_KEYPOINT_640X512:
+      return DecodeDirectKeypointDetection(mapping, output, row);
     default:
       return std::nullopt;
   }
@@ -279,7 +279,7 @@ ArmorDetector<CameraInfoV>::DecodeNetworkDetection(
 
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
-ArmorDetector<CameraInfoV>::DecodeSpYoloDetection(
+ArmorDetector<CameraInfoV>::DecodeYoloKeypointDetection(
     const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const
 {
   if (output.cols < detail::OutputLayout::number_end)
@@ -316,7 +316,7 @@ ArmorDetector<CameraInfoV>::DecodeSpYoloDetection(
 
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
-ArmorDetector<CameraInfoV>::DecodeShtechSzu0526Detection(
+ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
     const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const
 {
   if (output.cols < detail::OutputLayout::number_end)
@@ -349,9 +349,9 @@ ArmorDetector<CameraInfoV>::DecodeShtechSzu0526Detection(
   }
 
   NetworkDetection detection;
-  detection.color = detail::color_from_shtech_id(color_id);
-  const int target_id = detail::shtech_target_id_from_class_id(class_id);
-  detection.number = detail::number_from_shtech_target_id(target_id);
+  detection.color = detail::color_from_direct_keypoint_id(color_id);
+  const int target_id = detail::direct_keypoint_target_id_from_class_id(class_id);
+  detection.number = detail::number_from_direct_keypoint_target_id(target_id);
   detection.confidence = static_cast<float>(score);
   detection.points = points;
   detection.box = detail::bounding_rect_from_points(detection.points);

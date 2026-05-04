@@ -1,6 +1,6 @@
 # ArmorDetector
 
-`ArmorDetector` 当前保持 legacy 结果话题不变，同时额外输出 tracker 专用的帧包接口。内部链路已经收敛成四阶段：
+`ArmorDetector` 当前保持原结果话题不变，同时额外输出 tracker 专用的帧包接口。内部链路已经收敛成四阶段：
 
 1. `CameraFrameSync` 提供同步后的图像帧
 2. `OpenVINO` 模型直接输出颜色、编号和四角点
@@ -13,7 +13,7 @@
 - 输出: `armor_detector/armors_result`、`armor_detector/armors_frame`、`armor_detector/metrics`
 - 模型:
   - `model/yolov5.xml` + `model/yolov5.bin`
-  - `model/SZU0526_fp32input_512x640_nopre_fixoutput.onnx`
+  - `model/armor_keypoint_640x512.onnx`
 
 ## 对外接口
 
@@ -31,7 +31,7 @@
 - `PnPSolver` 现在直接吃编译期 `CameraInfo`
 - detector 解码阶段不再使用并行数组和散落的输出列号
 - `model_profile` 只切换检测器 adapter；后面的候选结构、PnP、tracker 和 Aimer 不跟着分叉
-- `SP_YOLOV5` 使用 640x640 等比缩放输入，`SHTECH_SZU0526` 使用 640x512 直接缩放输入
+- `YOLO_KEYPOINT_640X640` 使用 640x640 等比缩放输入，`DIRECT_KEYPOINT_640X512` 使用 640x512 直接缩放输入
 - detector 发布 `armors_frame` 时不再额外复制一份 imu/pose 缓冲
 - `ArmorDetectorResult` 保留诊断字段：
   - `raw_points / refined` 用于区分网络原始角点和传统细化后的角点

@@ -85,10 +85,10 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         diagnostics_.dump_refine_fails_max, ec ? 0 : 1);
   }
 
-  const char* model_path = ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH;
-  if (cfg_.yolo.model_profile == DetectorProfile::SHTECH_SZU0526)
+  const char* model_path = ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH;
+  if (cfg_.yolo.model_profile == DetectorProfile::DIRECT_KEYPOINT_640X512)
   {
-    model_path = ARMOR_DETECTOR_SHTECH_SZU0526_MODEL_PATH;
+    model_path = ARMOR_DETECTOR_DIRECT_KEYPOINT_MODEL_PATH;
   }
 
   XR_LOG_INFO("ArmorDetector profile=%s model=%s",

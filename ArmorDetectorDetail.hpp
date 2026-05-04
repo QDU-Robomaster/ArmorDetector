@@ -6,9 +6,9 @@ namespace armor_detector_detail
 // 只保留与模块主体相关的低层工具，避免 detector 主逻辑里充满魔法数字。
 constexpr double deg2rad = CV_PI / 180.0;
 constexpr int yolo_input_size = 640;
-constexpr int shtech_szu0526_input_width = 640;
-constexpr int shtech_szu0526_input_height = 512;
-constexpr double shtech_szu0526_nms_box_padding_ratio = 0.10;
+constexpr int direct_keypoint_input_width = 640;
+constexpr int direct_keypoint_input_height = 512;
+constexpr double direct_keypoint_nms_box_padding_ratio = 0.10;
 constexpr uint32_t sync_frame_wait_timeout_ms = 100;
 constexpr uint32_t metrics_log_period = 30;
 constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
@@ -21,8 +21,8 @@ struct NetworkInputShape
 
 enum class DetectorProfile : uint8_t
 {
-  SP_YOLOV5 = 0,
-  SHTECH_SZU0526 = 1,
+  YOLO_KEYPOINT_640X640 = 0,
+  DIRECT_KEYPOINT_640X512 = 1,
 };
 
 enum class ResizeMode : uint8_t
@@ -33,7 +33,7 @@ enum class ResizeMode : uint8_t
 
 struct DetectorProfileSpec
 {
-  const char* name{"sp_yolov5"};
+  const char* name{"yolo_keypoint_640x640"};
   NetworkInputShape input_shape{};
   ResizeMode resize_mode{ResizeMode::PROPORTIONAL};
   double nms_box_padding_ratio{0.0};
@@ -43,13 +43,13 @@ inline DetectorProfileSpec ProfileSpecFor(DetectorProfile profile)
 {
   switch (profile)
   {
-    case DetectorProfile::SP_YOLOV5:
+    case DetectorProfile::YOLO_KEYPOINT_640X640:
       return {};
-    case DetectorProfile::SHTECH_SZU0526:
-      return {"shtech_szu0526",
-              {shtech_szu0526_input_width, shtech_szu0526_input_height},
+    case DetectorProfile::DIRECT_KEYPOINT_640X512:
+      return {"direct_keypoint_640x512",
+              {direct_keypoint_input_width, direct_keypoint_input_height},
               ResizeMode::STRETCH,
-              shtech_szu0526_nms_box_padding_ratio};
+              direct_keypoint_nms_box_padding_ratio};
     default:
       return {"unknown", {}, ResizeMode::PROPORTIONAL, 0.0};
   }
@@ -256,7 +256,7 @@ inline ArmorColor color_from_yolo_id(int color_id)
   return ArmorColor::UNKNOWN;
 }
 
-inline ArmorColor color_from_shtech_id(int color_id)
+inline ArmorColor color_from_direct_keypoint_id(int color_id)
 {
   if (color_id == 0)
   {
@@ -294,7 +294,7 @@ inline ArmorNumber number_from_yolo_id(int number_id)
   }
 }
 
-inline ArmorNumber number_from_shtech_target_id(int target_id)
+inline ArmorNumber number_from_direct_keypoint_target_id(int target_id)
 {
   switch (target_id)
   {
@@ -319,7 +319,7 @@ inline ArmorNumber number_from_shtech_target_id(int target_id)
   }
 }
 
-inline int shtech_target_id_from_class_id(int class_id)
+inline int direct_keypoint_target_id_from_class_id(int class_id)
 {
   if (class_id == 7 || class_id == 8)
   {
