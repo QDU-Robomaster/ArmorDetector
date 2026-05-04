@@ -1,7 +1,20 @@
 #pragma once
 
-// Network stage: ROI selection, model inference, YOLO output decode, semantic
-// filtering, and candidate construction.
+/**
+ * @file ArmorDetectorInference.hpp
+ * @brief ArmorDetector 网络输入构建、推理输出解码和网络候选后处理。
+ */
+
+/**
+ * @brief 对单帧图像执行网络 detector 主流程。
+ *
+ * 该函数负责 ROI 裁剪、网络输入构建、OpenVINO 推理、输出解码和 ROI 坐标还原。
+ * 传统角点细化和语义过滤在 DecodeOutput() 内完成。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param raw_img 输入 BGR 图像。
+ * @return 本帧有效装甲板候选。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
 ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
@@ -91,6 +104,17 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
   return armors;
 }
 
+/**
+ * @brief 按当前 profile 将 detector 图像缩放成网络输入。
+ *
+ * PROPORTIONAL profile 使用 letterbox 并记录输入偏移；STRETCH profile 直接拉伸。
+ * mapping 总是描述网络输入坐标如何还原到 detector_img 坐标。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param detector_img detector 处理区域图像。
+ * @param mapping 输出的坐标还原映射。
+ * @return 网络输入尺寸 BGR8 图像；输入空图时返回空 Mat。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
     const cv::Mat& detector_img, detail::NetworkInputMapping& mapping) const
@@ -147,6 +171,18 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
   return input;
 }
 
+/**
+ * @brief 将网络输出矩阵转换成内部装甲板候选。
+ *
+ * 输出先按 profile 解码为 NetworkDetection，再执行 NMS、颜色/编号/置信度过滤、
+ * 可选传统角点细化和尺寸类型一致性检查。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param mapping 网络输入到 detector 图像的坐标映射。
+ * @param output 网络输出矩阵。
+ * @param bgr_img detector 源图像。
+ * @return 通过所有 detector 后处理门限的候选列表。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
 ArmorDetector<CameraInfoV>::DecodeOutput(
@@ -261,6 +297,15 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   return armors;
 }
 
+/**
+ * @brief 根据当前 model_profile 分派到对应的单行 decoder。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param mapping 网络输入到 detector 图像的坐标映射。
+ * @param output 网络输出矩阵。
+ * @param row 待解码输出行。
+ * @return 成功解码时返回 NetworkDetection，否则返回 nullopt。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
 ArmorDetector<CameraInfoV>::DecodeNetworkDetection(
@@ -277,6 +322,17 @@ ArmorDetector<CameraInfoV>::DecodeNetworkDetection(
   }
 }
 
+/**
+ * @brief 解码 YOLO keypoint profile 的单行输出。
+ *
+ * 模型输出角点顺序在这里转换为 detector 统一顺序：左上、右上、右下、左下。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param mapping 网络输入到 detector 图像的坐标映射。
+ * @param output 网络输出矩阵。
+ * @param row 待解码输出行。
+ * @return 通过置信度门限时返回网络检测单元。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
 ArmorDetector<CameraInfoV>::DecodeYoloKeypointDetection(
@@ -314,6 +370,17 @@ ArmorDetector<CameraInfoV>::DecodeYoloKeypointDetection(
   return detection;
 }
 
+/**
+ * @brief 解码 direct-keypoint profile 的单行输出。
+ *
+ * direct profile 使用拉伸输入和不同类别映射；角点同样在此统一成 detector 顺序。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param mapping 网络输入到 detector 图像的坐标映射。
+ * @param output 网络输出矩阵。
+ * @param row 待解码输出行。
+ * @return 通过置信度和可选四边形门限时返回网络检测单元。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
 ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
@@ -358,6 +425,16 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
   return detection;
 }
 
+/**
+ * @brief 从网络检测单元创建内部候选。
+ *
+ * 候选会保留网络原始角点，并立即计算中心、归一化中心和尺寸比例等几何派生量。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param detection 网络检测单元。
+ * @param bgr_img detector 源图像。
+ * @return 初始化完成的内部候选。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 typename ArmorDetector<CameraInfoV>::CandidateArmor
 ArmorDetector<CameraInfoV>::BuildCandidateArmor(

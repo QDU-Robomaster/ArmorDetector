@@ -1,7 +1,20 @@
 #pragma once
 
-// Runtime glue: configuration, frame conversion, worker thread, and publishing
-// order. Keep image-processing stages in the dedicated implementation headers.
+/**
+ * @file ArmorDetectorRuntime.hpp
+ * @brief ArmorDetector 配置、同步帧消费线程和帧级运行时 glue。
+ */
+
+/**
+ * @brief 构造 detector，加载模型并启动同步帧 worker。
+ *
+ * detector 当前不直接访问 HardwareContainer；图像和 IMU 由 CameraFrameSync 输入。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param app 应用管理器，用于注册本模块。
+ * @param cfg detector 初始配置。
+ * @param sync 同步帧来源。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
                                           LibXR::ApplicationManager& app,
@@ -18,6 +31,15 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
   app.Register(*this);
 }
 
+/**
+ * @brief 更新配置、解析诊断环境变量并按 profile 重新加载模型。
+ *
+ * 支持的诊断环境变量包括每帧 audit、零检测帧 audit、关闭传统细化、letterbox
+ * 策略切换和细化失败 dump。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param cfg 新 detector 配置。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
 {
@@ -96,6 +118,16 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   network_.Configure(cfg_.yolo.model_profile, model_path);
 }
 
+/**
+ * @brief 处理已经转换为 BGR Mat 的同步帧。
+ *
+ * 该函数保持 armors_frame 中的 source_frame 指针与当前检测结果同步，随后执行
+ * detector 主链路、填充 metrics，并按 armors_frame、armors_result、metrics 的顺序发布。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param img_msg BGR 图像。
+ * @param synced_frame 原始同步帧。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
                                               const SyncedFrame& synced_frame)
@@ -217,6 +249,15 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   }
 }
 
+/**
+ * @brief 将同步帧中的原始图像数据包装成 OpenCV Mat 并转换为 BGR。
+ *
+ * CameraInfoV 的 encoding/width/height/step 必须与图像帧内存布局一致，否则
+ * 后续 detector 的像素解释和 PnP 内参都会失配。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param synced_frame CameraFrameSync 输出的同步帧。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_frame)
 {
@@ -247,6 +288,15 @@ void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_fr
   ProcessImage(bgr_img, synced_frame);
 }
 
+/**
+ * @brief 同步帧 worker 主循环。
+ *
+ * worker 持有 CameraFrameSync subscriber，持续等待同步帧；超时只继续等待，非
+ * OK 错误会停止 worker 并打印错误。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param self detector 实例。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self)
 {

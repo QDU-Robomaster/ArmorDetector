@@ -1,44 +1,101 @@
 #pragma once
 
-// 仅供 ArmorDetector.hpp 在类声明之后包含。
+/**
+ * @file ArmorDetectorDetail.hpp
+ * @brief ArmorDetector 内部使用的常量、profile 描述和轻量几何/语义工具。
+ */
+
+/**
+ * @brief ArmorDetector 内部实现命名空间。
+ *
+ * 这些工具不构成跨模块 ABI；对外请使用 armor.hpp 中的结果结构。
+ */
 namespace armor_detector_detail
 {
-// 只保留与模块主体相关的低层工具，避免 detector 主逻辑里充满魔法数字。
+
+/**
+ * @brief 角度到弧度的换算系数。
+ */
 constexpr double deg2rad = CV_PI / 180.0;
+
+/**
+ * @brief 正方形 keypoint detector 默认输入边长。
+ */
 constexpr int yolo_input_size = 640;
+
+/**
+ * @brief 直接关键点 detector 输入宽度。
+ */
 constexpr int direct_keypoint_input_width = 640;
+
+/**
+ * @brief 直接关键点 detector 输入高度。
+ */
 constexpr int direct_keypoint_input_height = 512;
+
+/**
+ * @brief 直接关键点 profile 的 NMS bbox 膨胀比例。
+ */
 constexpr double direct_keypoint_nms_box_padding_ratio = 0.10;
+
+/**
+ * @brief 同步帧 worker 单次等待超时，单位 ms。
+ */
 constexpr uint32_t sync_frame_wait_timeout_ms = 100;
+
+/**
+ * @brief 周期性指标日志输出帧间隔。
+ */
 constexpr uint32_t metrics_log_period = 30;
+
+/**
+ * @brief 同步帧 worker 线程栈大小。
+ */
 constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
 
+/**
+ * @brief detector 网络输入尺寸。
+ */
 struct NetworkInputShape
 {
-  int width{yolo_input_size};
-  int height{yolo_input_size};
+  int width{yolo_input_size};  ///< 输入宽度，单位 px。
+  int height{yolo_input_size}; ///< 输入高度，单位 px。
 };
 
+/**
+ * @brief detector 模型和 decoder profile。
+ */
 enum class DetectorProfile : uint8_t
 {
-  YOLO_KEYPOINT_640X640 = 0,
-  DIRECT_KEYPOINT_640X512 = 1,
+  YOLO_KEYPOINT_640X640 = 0,   ///< 640x640 等比例输入的 YOLO keypoint 输出。
+  DIRECT_KEYPOINT_640X512 = 1, ///< 640x512 拉伸输入的直接关键点输出。
 };
 
+/**
+ * @brief 输入图像 resize 策略。
+ */
 enum class ResizeMode : uint8_t
 {
-  PROPORTIONAL,
-  STRETCH,
+  PROPORTIONAL, ///< 保持比例并填充 letterbox。
+  STRETCH,      ///< 直接拉伸到模型输入尺寸。
 };
 
+/**
+ * @brief detector profile 的静态规格。
+ */
 struct DetectorProfileSpec
 {
-  const char* name{"yolo_keypoint_640x640"};
-  NetworkInputShape input_shape{};
-  ResizeMode resize_mode{ResizeMode::PROPORTIONAL};
-  double nms_box_padding_ratio{0.0};
+  const char* name{"yolo_keypoint_640x640"};          ///< 配置/日志使用的 profile 名称。
+  NetworkInputShape input_shape{};                    ///< 网络输入宽高。
+  ResizeMode resize_mode{ResizeMode::PROPORTIONAL};   ///< 输入 resize 策略。
+  double nms_box_padding_ratio{0.0};                  ///< NMS 前 bbox 膨胀比例。
 };
 
+/**
+ * @brief 查询 detector profile 对应的静态规格。
+ * @param profile detector profile。
+ * @return profile 规格；未知值返回安全兜底规格。
+ */
 inline DetectorProfileSpec ProfileSpecFor(DetectorProfile profile)
 {
   switch (profile)
@@ -55,17 +112,31 @@ inline DetectorProfileSpec ProfileSpecFor(DetectorProfile profile)
   }
 }
 
+/**
+ * @brief 查询 detector profile 的可读名称。
+ * @param profile detector profile。
+ * @return profile 名称字符串。
+ */
 inline const char* DetectorProfileName(DetectorProfile profile)
 {
   return ProfileSpecFor(profile).name;
 }
 
+/**
+ * @brief 网络输入坐标到原始 detector 图像坐标的映射。
+ */
 struct NetworkInputMapping
 {
-  double x_scale{1.0};
-  double y_scale{1.0};
-  cv::Point2f input_offset{};
+  double x_scale{1.0};         ///< 网络 x 坐标还原到源图像的比例。
+  double y_scale{1.0};         ///< 网络 y 坐标还原到源图像的比例。
+  cv::Point2f input_offset{};  ///< letterbox 填充导致的输入坐标偏移。
 
+  /**
+   * @brief 将模型输入平面上的点还原到 detector 图像平面。
+   * @param x 模型输入坐标 x。
+   * @param y 模型输入坐标 y。
+   * @return 源图像像素坐标。
+   */
   [[nodiscard]] cv::Point2f MapToSource(float x, float y) const
   {
     return {
@@ -74,6 +145,11 @@ struct NetworkInputMapping
   }
 };
 
+/**
+ * @brief 将 64-bit 计数安全压缩成日志可打印的 32-bit 值。
+ * @param value 原始值。
+ * @return 截断饱和后的 uint32_t。
+ */
 inline uint32_t to_log_u32(uint64_t value)
 {
   return value > std::numeric_limits<uint32_t>::max()
@@ -81,6 +157,12 @@ inline uint32_t to_log_u32(uint64_t value)
              : static_cast<uint32_t>(value);
 }
 
+/**
+ * @brief 缩放浮点指标并转换成日志用 uint32_t。
+ * @param value 原始浮点值。
+ * @param scale 缩放倍数。
+ * @return 非法/非正值返回 0，溢出时饱和。
+ */
 inline uint32_t scaled_log_u32(double value, double scale)
 {
   if (!std::isfinite(value) || value <= 0.0)
@@ -96,15 +178,26 @@ inline uint32_t scaled_log_u32(double value, double scale)
   return static_cast<uint32_t>(std::lround(scaled));
 }
 
+/**
+ * @brief 网络输出行的字段布局。
+ */
 struct OutputLayout
 {
-  static constexpr int objectness_index = 8;
-  static constexpr int color_begin = 9;
-  static constexpr int color_end = 13;
-  static constexpr int number_begin = 13;
-  static constexpr int number_end = 22;
+  static constexpr int objectness_index = 8; ///< 目标置信度 logit 列。
+  static constexpr int color_begin = 9;      ///< 颜色分类起始列，闭区间。
+  static constexpr int color_end = 13;       ///< 颜色分类结束列，开区间。
+  static constexpr int number_begin = 13;    ///< 编号分类起始列，闭区间。
+  static constexpr int number_end = 22;      ///< 编号分类结束列，开区间。
 };
 
+/**
+ * @brief 在输出矩阵某一行的指定列范围内取 argmax。
+ * @param output 输出矩阵。
+ * @param row 行号。
+ * @param begin 起始列，闭区间。
+ * @param end 结束列，开区间。
+ * @return 最大值列号减去 begin 后的类别 id。
+ */
 inline int ArgMaxRowRange(const cv::Mat& output, int row, int begin, int end)
 {
   int best = begin;
@@ -121,11 +214,21 @@ inline int ArgMaxRowRange(const cv::Mat& output, int row, int begin, int end)
   return best - begin;
 }
 
+/**
+ * @brief 判断点坐标是否都是有限数。
+ * @param point 待检查点。
+ * @return x/y 均有限时返回 true。
+ */
 inline bool FinitePoint(const cv::Point2f& point)
 {
   return std::isfinite(point.x) && std::isfinite(point.y);
 }
 
+/**
+ * @brief 计算四边形面积。
+ * @param points 顺序排列的四边形角点。
+ * @return 绝对面积，单位 px^2。
+ */
 inline double QuadArea(const std::array<cv::Point2f, 4>& points)
 {
   double area = 0.0;
@@ -138,6 +241,11 @@ inline double QuadArea(const std::array<cv::Point2f, 4>& points)
   return std::abs(area) * 0.5;
 }
 
+/**
+ * @brief 判断四个点是否构成非退化凸四边形。
+ * @param points 顺序排列的四边形角点。
+ * @return 凸且非共线时返回 true。
+ */
 inline bool IsConvexQuad(const std::array<cv::Point2f, 4>& points)
 {
   int sign = 0;
@@ -168,6 +276,12 @@ inline bool IsConvexQuad(const std::array<cv::Point2f, 4>& points)
   return sign != 0;
 }
 
+/**
+ * @brief 检查角点是否可用于后续 PnP。
+ * @param points 顺序排列的四边形角点。
+ * @param min_area 最小面积门限，单位 px^2。
+ * @return 点有限、凸且面积足够时返回 true。
+ */
 inline bool IsUsableQuad(const std::array<cv::Point2f, 4>& points,
                          double min_area)
 {
@@ -181,6 +295,11 @@ inline bool IsUsableQuad(const std::array<cv::Point2f, 4>& points,
   return IsConvexQuad(points) && QuadArea(points) >= min_area;
 }
 
+/**
+ * @brief 将 CameraTypes::Encoding 转成 OpenCV Mat 类型。
+ * @param encoding 相机图像编码。
+ * @return OpenCV CV_8UC* 类型；不支持时返回 -1。
+ */
 inline int CvTypeFromEncoding(CameraTypes::Encoding encoding)
 {
   switch (encoding)
@@ -198,6 +317,12 @@ inline int CvTypeFromEncoding(CameraTypes::Encoding encoding)
   }
 }
 
+/**
+ * @brief 按相机编码把图像转换成 BGR 通道顺序。
+ * @param input 输入图像。
+ * @param encoding 输入图像编码。
+ * @return BGR 图像；原本就是 BGR/MONO 时返回共享数据视图。
+ */
 inline cv::Mat ConvertToBgrWithEncoding(const cv::Mat& input,
                                         CameraTypes::Encoding encoding)
 {
@@ -226,6 +351,11 @@ inline cv::Mat ConvertToBgrWithEncoding(const cv::Mat& input,
   }
 }
 
+/**
+ * @brief 将配置中的颜色编号转为 ArmorColor。
+ * @param detect_color 0=red，1=blue，其他=不限制。
+ * @return 对应目标颜色；不限制时返回 UNKNOWN。
+ */
 inline ArmorColor detect_color_from_config(int detect_color)
 {
   if (detect_color == 0)
@@ -239,6 +369,11 @@ inline ArmorColor detect_color_from_config(int detect_color)
   return ArmorColor::UNKNOWN;
 }
 
+/**
+ * @brief 将 YOLO keypoint profile 的颜色类别 id 转为 ArmorColor。
+ * @param color_id 模型颜色类别 id。
+ * @return detector 统一颜色枚举。
+ */
 inline ArmorColor color_from_yolo_id(int color_id)
 {
   if (color_id == 0)
@@ -256,6 +391,11 @@ inline ArmorColor color_from_yolo_id(int color_id)
   return ArmorColor::UNKNOWN;
 }
 
+/**
+ * @brief 将 direct-keypoint profile 的颜色类别 id 转为 ArmorColor。
+ * @param color_id 模型颜色类别 id。
+ * @return detector 统一颜色枚举。
+ */
 inline ArmorColor color_from_direct_keypoint_id(int color_id)
 {
   if (color_id == 0)
@@ -269,6 +409,11 @@ inline ArmorColor color_from_direct_keypoint_id(int color_id)
   return ArmorColor::UNKNOWN;
 }
 
+/**
+ * @brief 将 YOLO keypoint profile 的编号类别 id 转为 ArmorNumber。
+ * @param number_id 模型编号类别 id。
+ * @return detector 统一编号枚举。
+ */
 inline ArmorNumber number_from_yolo_id(int number_id)
 {
   switch (number_id)
@@ -294,6 +439,11 @@ inline ArmorNumber number_from_yolo_id(int number_id)
   }
 }
 
+/**
+ * @brief 将 direct-keypoint profile 的 target id 转为 ArmorNumber。
+ * @param target_id 模型目标 id。
+ * @return detector 统一编号枚举。
+ */
 inline ArmorNumber number_from_direct_keypoint_target_id(int target_id)
 {
   switch (target_id)
@@ -319,6 +469,11 @@ inline ArmorNumber number_from_direct_keypoint_target_id(int target_id)
   }
 }
 
+/**
+ * @brief 将 direct-keypoint profile 的 class id 规整成目标 id。
+ * @param class_id 模型原始 class id。
+ * @return 规整后的目标 id。
+ */
 inline int direct_keypoint_target_id_from_class_id(int class_id)
 {
   if (class_id == 7 || class_id == 8)
@@ -336,6 +491,11 @@ inline int direct_keypoint_target_id_from_class_id(int class_id)
   return class_id;
 }
 
+/**
+ * @brief 将任意四个角点排序为 detector/PnP 统一顺序。
+ * @param keypoints 输入四点。
+ * @return 左上、右上、右下、左下顺序的四点。
+ */
 inline std::array<cv::Point2f, 4> sort_keypoints(
     const std::array<cv::Point2f, 4>& keypoints)
 {
@@ -363,6 +523,12 @@ inline std::array<cv::Point2f, 4> sort_keypoints(
   return {top_points[0], top_points[1], bottom_points[1], bottom_points[0]};
 }
 
+/**
+ * @brief 将 OpenCV PnP rvec/tvec 转成 LibXR Transform。
+ * @param rvec OpenCV 旋转向量。
+ * @param tvec OpenCV 平移向量，单位 m。
+ * @return 相机坐标系下的 LibXR 位姿。
+ */
 inline LibXR::Transform<double> make_pose(const cv::Mat& rvec, const cv::Mat& tvec)
 {
   cv::Mat rotation_cv;
@@ -383,11 +549,21 @@ inline LibXR::Transform<double> make_pose(const cv::Mat& rvec, const cv::Mat& tv
                               tvec.at<double>(2)));
 }
 
+/**
+ * @brief 计算四边形中心。
+ * @param points 顺序四角点。
+ * @return 四点均值。
+ */
 inline cv::Point2f quad_center(const std::array<cv::Point2f, 4>& points)
 {
   return (points[0] + points[1] + points[2] + points[3]) * 0.25F;
 }
 
+/**
+ * @brief 根据四个浮点角点构造像素包围盒。
+ * @param points 四角点。
+ * @return 至少 1x1 的整数像素包围盒。
+ */
 inline cv::Rect bounding_rect_from_points(
     const std::array<cv::Point2f, 4>& points)
 {
@@ -408,6 +584,12 @@ inline cv::Rect bounding_rect_from_points(
           std::max(1, static_cast<int>(max_y - min_y))};
 }
 
+/**
+ * @brief 按宽高比例向外扩展包围盒。
+ * @param rect 原始包围盒。
+ * @param padding_ratio 宽高方向各自的扩展比例。
+ * @return 扩展后的包围盒；比例非正时返回原包围盒。
+ */
 inline cv::Rect ExpandRect(const cv::Rect& rect, double padding_ratio)
 {
   if (padding_ratio <= 0.0)

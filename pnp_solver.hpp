@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file pnp_solver.hpp
+ * @brief 基于编译期相机标定参数的装甲板 PnP 求解器。
+ */
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -12,48 +17,125 @@
 #include "CameraBase.hpp"
 #include "armor.hpp"
 
+/**
+ * @brief 将装甲板四个图像角点求解为相机坐标系位姿。
+ *
+ * 求解器从 CameraInfoV 构造相机内参和畸变系数，并为大小装甲板缓存
+ * 物理角点。输入角点约定为左上、右上、右下、左下。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 class PnPSolver
 {
  public:
-  using CameraInfo = CameraTypes::CameraInfo;
+  using CameraInfo = CameraTypes::CameraInfo; ///< 相机参数类型别名。
 
+  /**
+   * @brief 当前求解器绑定的相机标定参数。
+   */
   static inline constexpr CameraInfo camera_info = CameraInfoV;
+
+  /**
+   * @brief 从 CameraInfoV 中提取出的 PnP 可用畸变系数信息。
+   */
   static inline constexpr auto pnp_dist_coeffs_info =
       CameraTypes::BuildPnPDistCoeffs(camera_info);
 
+  /**
+   * @brief 构造 PnP 求解器并缓存相机矩阵、畸变系数和装甲板物理角点。
+   */
   PnPSolver();
 
+  /**
+   * @brief 求解单个装甲板在相机坐标系下的位姿。
+   * @param image_armor_points 图像角点，顺序为左上、右上、右下、左下。
+   * @param armor_type 装甲板尺寸类型，用于选择物理宽高。
+   * @param rvec 输出旋转向量。
+   * @param tvec 输出平移向量，单位 m。
+   * @param reprojection_error_px 可选输出平均重投影误差，单位 px。
+   * @return 至少一个正深度候选成功时返回 true。
+   */
   [[nodiscard]] bool SolvePnP(const std::array<cv::Point2f, 4>& image_armor_points,
                               ArmorType armor_type, cv::Mat& rvec,
                               cv::Mat& tvec,
                               double* reprojection_error_px = nullptr) const;
 
+  /**
+   * @brief 计算图像点到相机主点的像素距离。
+   * @param image_point 图像像素点。
+   * @return 到主点的欧氏距离，单位 px。
+   */
   [[nodiscard]] double CalculateDistanceToCenter(
       const cv::Point2f& image_point) const;
 
  private:
+  /**
+   * @brief 计算一组 3D/2D 对应点的平均重投影误差。
+   * @param object_points 物理坐标点，单位 m。
+   * @param image_points 图像像素点。
+   * @param camera_matrix 相机内参矩阵。
+   * @param dist_coeffs 畸变系数矩阵。
+   * @param rvec 旋转向量。
+   * @param tvec 平移向量。
+   * @return 平均像素误差；投影失败时返回 infinity。
+   */
   [[nodiscard]] static double ComputeReprojectionError(
       const std::vector<cv::Point3f>& object_points,
       const std::vector<cv::Point2f>& image_points, const cv::Mat& camera_matrix,
       const cv::Mat& dist_coeffs, const cv::Mat& rvec, const cv::Mat& tvec);
+
+  /**
+   * @brief 从 CameraInfoV 构造 OpenCV camera_matrix。
+   * @return 3x3 CV_64F 相机内参矩阵。
+   */
   static cv::Mat BuildCameraMatrix();
+
+  /**
+   * @brief 从 CameraInfoV 构造 OpenCV dist_coeffs。
+   * @return OpenCV 可直接传入 solvePnP 的畸变系数矩阵。
+   */
   static cv::Mat BuildDistCoeffs();
+
+  /**
+   * @brief 按装甲板物理尺寸构造四个物理角点。
+   * @param width_mm 装甲板宽度，单位 mm。
+   * @param height_mm 装甲板高度，单位 mm。
+   * @return 相机/PnP 坐标约定下的四个物理角点，单位 m。
+   */
   static std::vector<cv::Point3f> BuildArmorPoints(double width_mm,
                                                    double height_mm);
 
  private:
-  cv::Mat camera_matrix_;
-  cv::Mat dist_coeffs_;
-  std::vector<cv::Point3f> small_armor_points_;
-  std::vector<cv::Point3f> large_armor_points_;
+  cv::Mat camera_matrix_; ///< OpenCV 相机内参矩阵。
+  cv::Mat dist_coeffs_;   ///< OpenCV 畸变系数矩阵。
+  std::vector<cv::Point3f> small_armor_points_; ///< 小装甲板物理角点。
+  std::vector<cv::Point3f> large_armor_points_; ///< 大装甲板物理角点。
 
+  /**
+   * @brief 小装甲板宽度，单位 mm。
+   */
   inline static constexpr double small_armor_width_mm = 135.0;
+
+  /**
+   * @brief 小装甲板高度，单位 mm。
+   */
   inline static constexpr double small_armor_height_mm = 56.0;
+
+  /**
+   * @brief 大装甲板宽度，单位 mm。
+   */
   inline static constexpr double large_armor_width_mm = 225.0;
+
+  /**
+   * @brief 大装甲板高度，单位 mm。
+   */
   inline static constexpr double large_armor_height_mm = 56.0;
 };
 
+/**
+ * @brief 构造并缓存 PnP 求解所需的固定矩阵和物理模型。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 PnPSolver<CameraInfoV>::PnPSolver()
     : camera_matrix_(BuildCameraMatrix()),
@@ -65,6 +147,9 @@ PnPSolver<CameraInfoV>::PnPSolver()
 {
 }
 
+/**
+ * @brief 从编译期 CameraInfoV 复制相机矩阵到 OpenCV Mat。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat PnPSolver<CameraInfoV>::BuildCameraMatrix()
 {
@@ -73,6 +158,9 @@ cv::Mat PnPSolver<CameraInfoV>::BuildCameraMatrix()
       .clone();
 }
 
+/**
+ * @brief 根据畸变模型生成 OpenCV PnP 可用的畸变系数。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat PnPSolver<CameraInfoV>::BuildDistCoeffs()
 {
@@ -101,6 +189,9 @@ cv::Mat PnPSolver<CameraInfoV>::BuildDistCoeffs()
       .clone();
 }
 
+/**
+ * @brief 生成中心在原点的装甲板四角物理坐标。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_mm,
                                                                   double height_mm)
@@ -115,6 +206,9 @@ std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_m
       {0.0f, static_cast<float>(-half_width_m), static_cast<float>(-half_height_m)}};
 }
 
+/**
+ * @brief 用 IPPE、ITERATIVE、EPNP 多候选求解并选择重投影误差最小的正深度解。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 bool PnPSolver<CameraInfoV>::SolvePnP(
     const std::array<cv::Point2f, 4>& image_armor_points, ArmorType armor_type,
@@ -254,6 +348,9 @@ bool PnPSolver<CameraInfoV>::SolvePnP(
   return found;
 }
 
+/**
+ * @brief 计算图像点到相机主点的像素距离。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 double PnPSolver<CameraInfoV>::CalculateDistanceToCenter(
     const cv::Point2f& image_point) const
@@ -263,6 +360,9 @@ double PnPSolver<CameraInfoV>::CalculateDistanceToCenter(
   return cv::norm(image_point - cv::Point2f(cx, cy));
 }
 
+/**
+ * @brief 对候选位姿执行 projectPoints 并返回平均像素误差。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 double PnPSolver<CameraInfoV>::ComputeReprojectionError(
     const std::vector<cv::Point3f>& object_points,

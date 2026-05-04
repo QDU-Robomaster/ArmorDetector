@@ -1,7 +1,20 @@
 #pragma once
 
-// Output stage: convert accepted candidates to detector topic payloads and run
-// PnP using the module camera model.
+/**
+ * @file ArmorDetectorPublish.hpp
+ * @brief ArmorDetector 输出消息填充和 PnP 发布阶段实现。
+ */
+
+/**
+ * @brief 将内部候选填充为对外 detector 结果包。
+ *
+ * 每个候选都会复制语义、2D 几何和细化状态，并使用模块相机参数执行 PnP。
+ * PnP 成功时 pose、pnp_valid 和 pnp_reprojection_error_px 才有效。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armors 内部候选列表。
+ * @param bgr_img 源图像，用于归一化中心。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::FillResultMessage(
     const std::vector<CandidateArmor>& armors, const cv::Mat& bgr_img)

@@ -1,7 +1,21 @@
 #pragma once
 
-// Traditional image-processing stage: binary extraction, lightbar fitting, corner
-// refinement, geometry classification, and refine diagnostics.
+/**
+ * @file ArmorDetectorRefine.hpp
+ * @brief ArmorDetector 传统灯条细化、几何分类和细化诊断实现。
+ */
+
+/**
+ * @brief 构建传统灯条检测用的单通道二值图。
+ *
+ * 红/蓝目标使用对应颜色通道差分；未知颜色使用红蓝通道绝对差；单通道输入则
+ * 直接灰度阈值。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param bgr_img 输入图像或 ROI。
+ * @param target_color 目标颜色。
+ * @return 二值图；输入空图时返回空 Mat。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat ArmorDetector<CameraInfoV>::BuildTraditionalBinary(
     const cv::Mat& bgr_img, ArmorColor target_color) const
@@ -47,6 +61,17 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildTraditionalBinary(
   return binary_img;
 }
 
+/**
+ * @brief 用传统灯条检测结果细化网络装甲板角点。
+ *
+ * 细化流程会围绕网络四点扩展 ROI，提取二值灯条，选择与原始左右灯条位置最接近
+ * 的一对灯条，并用其上下端点替换候选角点。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待细化候选，成功时原地更新。
+ * @param bgr_img detector 源图像。
+ * @return 成功找到灯条对并更新角点时返回 true。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 bool ArmorDetector<CameraInfoV>::RefineArmorCorners(
     CandidateArmor& armor, const cv::Mat& bgr_img)
@@ -172,6 +197,20 @@ bool ArmorDetector<CameraInfoV>::RefineArmorCorners(
   return true;
 }
 
+/**
+ * @brief 保存角点细化失败现场。
+ *
+ * dump 包含 ROI 原图、二值图、叠加图和文本元数据，用于定位阈值、ROI 或灯条匹配
+ * 问题。只有诊断开关打开且未超过数量上限时才会写文件。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param reason 失败原因标签。
+ * @param armor 细化前候选。
+ * @param bounding_box ROI 在源图中的包围盒。
+ * @param armor_roi ROI 原图。
+ * @param binary_img ROI 二值图。
+ * @param lightbars 已检测灯条列表。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::MaybeDumpRefineFailure(
     const char* reason, const CandidateArmor& armor, const cv::Rect& bounding_box,
@@ -266,6 +305,17 @@ void ArmorDetector<CameraInfoV>::MaybeDumpRefineFailure(
   }
 }
 
+/**
+ * @brief 从二值图轮廓中拟合灯条。
+ *
+ * 对每个轮廓先用 minAreaRect 和 fitLine 估计长轴，再计算几何指标和颜色，最后按
+ * x 坐标排序返回。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param bgr_img 与 binary_img 对齐的 BGR 图像。
+ * @param binary_img 单通道二值图。
+ * @return 通过 ValidateLightbar() 的灯条列表。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<typename ArmorDetector<CameraInfoV>::Lightbar>
 ArmorDetector<CameraInfoV>::DetectLightbars(const cv::Mat& bgr_img,
@@ -366,6 +416,13 @@ ArmorDetector<CameraInfoV>::DetectLightbars(const cv::Mat& bgr_img,
   return lightbars;
 }
 
+/**
+ * @brief 判断灯条几何是否满足传统细化门限。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param lightbar 待检查灯条。
+ * @return 角度、长宽比和长度均合理时返回 true。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 bool ArmorDetector<CameraInfoV>::ValidateLightbar(const Lightbar& lightbar) const
 {
@@ -376,6 +433,13 @@ bool ArmorDetector<CameraInfoV>::ValidateLightbar(const Lightbar& lightbar) cons
          lightbar.length > cfg_.traditional.min_lightbar_length;
 }
 
+/**
+ * @brief 检查候选的编号先验和尺寸类型是否冲突。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待检查候选。
+ * @return 没有大/小装甲编号冲突时返回 true。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 bool ArmorDetector<CameraInfoV>::ValidateArmorType(const CandidateArmor& armor) const
 {
@@ -387,6 +451,15 @@ bool ArmorDetector<CameraInfoV>::ValidateArmorType(const CandidateArmor& armor) 
   return !ArmorNumberIsSmall(armor.number);
 }
 
+/**
+ * @brief 更新候选装甲板的几何比例。
+ *
+ * ratio 定义为左右灯条中心距除以左右灯条最大长度，用于无法从编号确定大小时的
+ * 尺寸类型推断。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待更新候选。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::UpdateGeometryMetrics(CandidateArmor& armor) const
 {
@@ -404,6 +477,13 @@ void ArmorDetector<CameraInfoV>::UpdateGeometryMetrics(CandidateArmor& armor) co
   armor.ratio = width / std::max(max_lightbar_length, 1e-6);
 }
 
+/**
+ * @brief 根据几何比例和编号先验推断装甲板尺寸类型。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待推断候选。
+ * @return 推断出的尺寸类型。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 ArmorType ArmorDetector<CameraInfoV>::InferArmorType(const CandidateArmor& armor) const
 {
@@ -423,6 +503,14 @@ ArmorType ArmorDetector<CameraInfoV>::InferArmorType(const CandidateArmor& armor
   return ArmorType::SMALL;
 }
 
+/**
+ * @brief 将像素中心归一化到图像宽高范围。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param bgr_img 源图像。
+ * @param center 像素中心。
+ * @return 归一化中心。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Point2f ArmorDetector<CameraInfoV>::GetNormalizedCenter(
     const cv::Mat& bgr_img, const cv::Point2f& center) const
@@ -431,6 +519,14 @@ cv::Point2f ArmorDetector<CameraInfoV>::GetNormalizedCenter(
           center.y / static_cast<float>(std::max(1, bgr_img.rows))};
 }
 
+/**
+ * @brief 根据轮廓内红蓝通道强度估计灯条颜色。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param bgr_img BGR 图像。
+ * @param contour 轮廓点。
+ * @return 蓝通道总和更大返回 BLUE，否则返回 RED。
+ */
 template <CameraTypes::CameraInfo CameraInfoV>
 ArmorColor ArmorDetector<CameraInfoV>::GetContourColor(
     const cv::Mat& bgr_img, const std::vector<cv::Point>& contour) const
