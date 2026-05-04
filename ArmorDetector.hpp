@@ -19,12 +19,12 @@ constructor_args:
       roi_width: 600
       roi_height: 600
       use_traditional_refine: true
-      score_threshold: 0.7
-      nms_threshold: 0.3
-      min_confidence: 0.8
+      score_threshold: 0.1
+      nms_threshold: 0.0
+      min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
-      model_profile: detail::DetectorProfile::YOLO_KEYPOINT_640X640
+      model_profile: detail::DetectorProfile::DIRECT_KEYPOINT_640X512
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -152,13 +152,13 @@ class ArmorDetector : public LibXR::Application
     int roi_width{600};                  ///< ROI 宽度；负值表示全图宽度。
     int roi_height{600};                 ///< ROI 高度；负值表示全图高度。
     bool use_traditional_refine{true};   ///< 是否启用传统灯条角点细化。
-    double score_threshold{0.7};         ///< 网络目标置信度门限。
-    double nms_threshold{0.3};           ///< NMS IoU 门限。
-    double min_confidence{0.8};          ///< 语义过滤后的最终置信度门限。
+    double score_threshold{0.1};         ///< 网络目标置信度门限。
+    double nms_threshold{0.0};           ///< NMS IoU 门限；dense-grid profile 不使用该值。
+    double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
     /// 模型/decoder profile。
-    DetectorProfile model_profile{DetectorProfile::YOLO_KEYPOINT_640X640};
+    DetectorProfile model_profile{DetectorProfile::DIRECT_KEYPOINT_640X512};
   };
 
   /**
@@ -250,6 +250,16 @@ class ArmorDetector : public LibXR::Application
   };
 
   /**
+   * @brief NMS / overlap suppression 前的候选引用。
+   */
+  struct DetectionSelection
+  {
+    std::size_t index{0};         ///< detections 中的候选下标。
+    float confidence{0.0F};       ///< 用于排序和抑制的置信度。
+    cv::Rect box{};               ///< 用于抑制的包围盒。
+  };
+
+  /**
    * @brief 单帧 detector 内部计数器。
    */
   struct FrameCounters
@@ -332,6 +342,14 @@ class ArmorDetector : public LibXR::Application
   std::vector<CandidateArmor> DecodeOutput(
       const detail::NetworkInputMapping& mapping, const cv::Mat& output,
       const cv::Mat& bgr_img);
+
+  /**
+   * @brief 对已解码候选执行当前 profile 的交叠抑制。
+   * @param detections 已通过 decoder 门限的候选。
+   * @return 按当前 profile 语义保留的候选下标。
+   */
+  std::vector<int> SelectDetectionsAfterOverlapSuppression(
+      const std::vector<NetworkDetection>& detections) const;
 
   /**
    * @brief 按当前 profile 分派网络输出单行 decoder。

@@ -24,19 +24,34 @@ constexpr double deg2rad = CV_PI / 180.0;
 constexpr int yolo_input_size = 640;
 
 /**
- * @brief 直接关键点 detector 输入宽度。
+ * @brief dense-grid keypoint detector 输入宽度。
  */
 constexpr int direct_keypoint_input_width = 640;
 
 /**
- * @brief 直接关键点 detector 输入高度。
+ * @brief dense-grid keypoint detector 输入高度。
  */
 constexpr int direct_keypoint_input_height = 512;
 
 /**
- * @brief 直接关键点 profile 的 NMS bbox 膨胀比例。
+ * @brief dense-grid keypoint profile 的 NMS bbox 膨胀比例。
  */
-constexpr double direct_keypoint_nms_box_padding_ratio = 0.10;
+constexpr double direct_keypoint_nms_box_padding_ratio = 0.0;
+
+/**
+ * @brief dense-grid keypoint profile 的输出候选数量。
+ */
+constexpr int direct_keypoint_candidate_count = 6720;
+
+/**
+ * @brief dense-grid keypoint profile 的输出列数。
+ */
+constexpr int direct_keypoint_output_width = 21;
+
+/**
+ * @brief dense-grid keypoint profile 置信度排序后参与交叠抑制的最大候选数。
+ */
+constexpr int direct_keypoint_keep_topk = 128;
 
 /**
  * @brief 同步帧 worker 单次等待超时，单位 ms。
@@ -68,7 +83,7 @@ struct NetworkInputShape
 enum class DetectorProfile : uint8_t
 {
   YOLO_KEYPOINT_640X640 = 0,   ///< 640x640 等比例输入的 YOLO keypoint 输出。
-  DIRECT_KEYPOINT_640X512 = 1, ///< 640x512 拉伸输入的直接关键点输出。
+  DIRECT_KEYPOINT_640X512 = 1, ///< 640x512 拉伸输入的 dense-grid keypoint 输出。
 };
 
 /**
@@ -189,6 +204,80 @@ struct OutputLayout
   static constexpr int number_begin = 13;    ///< 编号分类起始列，闭区间。
   static constexpr int number_end = 22;      ///< 编号分类结束列，开区间。
 };
+
+/**
+ * @brief dense-grid keypoint 输出的字段布局。
+ */
+struct DirectKeypointOutputLayout
+{
+  static constexpr int point_begin = 0;       ///< 角点偏移起始列。
+  static constexpr int objectness_index = 8;  ///< 目标置信度列。
+  static constexpr int number_begin = 9;      ///< 编号分类起始列，闭区间。
+  static constexpr int number_end = 17;       ///< 编号分类结束列，开区间。
+  static constexpr int color_begin = 17;      ///< 颜色分类起始列，闭区间。
+  static constexpr int color_end = 19;        ///< 颜色分类结束列，开区间。
+  static constexpr int size_begin = 19;       ///< 尺寸分类起始列，闭区间。
+  static constexpr int size_end = 21;         ///< 尺寸分类结束列，开区间。
+};
+
+/**
+ * @brief 查询 profile 对应的输出列数。
+ * @param profile detector profile。
+ * @return 输出列数；未知 profile 返回 YOLO keypoint 列数作为兜底。
+ */
+inline int OutputColumnCountFor(DetectorProfile profile)
+{
+  if (profile == DetectorProfile::DIRECT_KEYPOINT_640X512)
+  {
+    return direct_keypoint_output_width;
+  }
+  return OutputLayout::number_end;
+}
+
+/**
+ * @brief dense-grid 输出行对应的网格单元。
+ */
+struct DirectKeypointGridCell
+{
+  int center_x{0}; ///< 网格中心 x，单位为模型输入像素。
+  int center_y{0}; ///< 网格中心 y，单位为模型输入像素。
+  int stride{8};   ///< 当前检测层 stride。
+};
+
+/**
+ * @brief 将 dense-grid 输出行号转换为网格中心和 stride。
+ * @param row 输出行号，范围为 [0, direct_keypoint_candidate_count)。
+ * @return 对应网格单元；越界时返回最后一层的兜底单元。
+ */
+inline DirectKeypointGridCell DirectKeypointGridCellForRow(int row)
+{
+  if (row < 0)
+  {
+    return {};
+  }
+
+  constexpr int stride8_cols = direct_keypoint_input_width / 8;
+  constexpr int stride8_count =
+      stride8_cols * (direct_keypoint_input_height / 8);
+  constexpr int stride16_cols = direct_keypoint_input_width / 16;
+  constexpr int stride16_count =
+      stride16_cols * (direct_keypoint_input_height / 16);
+
+  if (row < stride8_count)
+  {
+    return {(row % stride8_cols) * 8, (row / stride8_cols) * 8, 8};
+  }
+
+  row -= stride8_count;
+  if (row < stride16_count)
+  {
+    return {(row % stride16_cols) * 16, (row / stride16_cols) * 16, 16};
+  }
+
+  row -= stride16_count;
+  constexpr int stride32_cols = direct_keypoint_input_width / 32;
+  return {(row % stride32_cols) * 32, (row / stride32_cols) * 32, 32};
+}
 
 /**
  * @brief 在输出矩阵某一行的指定列范围内取 argmax。
@@ -392,7 +481,7 @@ inline ArmorColor color_from_yolo_id(int color_id)
 }
 
 /**
- * @brief 将 direct-keypoint profile 的颜色类别 id 转为 ArmorColor。
+ * @brief 将 dense-grid keypoint profile 的颜色类别 id 转为 ArmorColor。
  * @param color_id 模型颜色类别 id。
  * @return detector 统一颜色枚举。
  */
@@ -400,11 +489,11 @@ inline ArmorColor color_from_direct_keypoint_id(int color_id)
 {
   if (color_id == 0)
   {
-    return ArmorColor::BLUE;
+    return ArmorColor::RED;
   }
   if (color_id == 1)
   {
-    return ArmorColor::RED;
+    return ArmorColor::BLUE;
   }
   return ArmorColor::UNKNOWN;
 }
@@ -440,14 +529,16 @@ inline ArmorNumber number_from_yolo_id(int number_id)
 }
 
 /**
- * @brief 将 direct-keypoint profile 的 target id 转为 ArmorNumber。
- * @param target_id 模型目标 id。
+ * @brief 将 dense-grid keypoint profile 的 8 类编号 id 转为 ArmorNumber。
+ * @param class_id 模型原始 class id，范围通常为 [0, 7]。
  * @return detector 统一编号枚举。
  */
-inline ArmorNumber number_from_direct_keypoint_target_id(int target_id)
+inline ArmorNumber number_from_direct_keypoint_class_id(int class_id)
 {
-  switch (target_id)
+  switch (class_id)
   {
+    case 0:
+      return ArmorNumber::GUARD;
     case 1:
       return ArmorNumber::ONE;
     case 2:
@@ -458,37 +549,13 @@ inline ArmorNumber number_from_direct_keypoint_target_id(int target_id)
       return ArmorNumber::FOUR;
     case 5:
       return ArmorNumber::FIVE;
-    case 7:
-      return ArmorNumber::GUARD;
-    case 8:
+    case 6:
       return ArmorNumber::OUTPOST;
-    case 9:
+    case 7:
       return ArmorNumber::BASE;
     default:
       return ArmorNumber::UNKNOWN;
   }
-}
-
-/**
- * @brief 将 direct-keypoint profile 的 class id 规整成目标 id。
- * @param class_id 模型原始 class id。
- * @return 规整后的目标 id。
- */
-inline int direct_keypoint_target_id_from_class_id(int class_id)
-{
-  if (class_id == 7 || class_id == 8)
-  {
-    return 9;
-  }
-  if (class_id == 0)
-  {
-    return 7;
-  }
-  if (class_id == 6)
-  {
-    return 8;
-  }
-  return class_id;
 }
 
 /**

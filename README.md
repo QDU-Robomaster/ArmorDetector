@@ -13,7 +13,7 @@
 - 输出: `armor_detector/armors_result`、`armor_detector/armors_frame`、`armor_detector/metrics`
 - 模型:
   - `model/yolov5.xml` + `model/yolov5.bin`
-  - `model/armor_keypoint_640x512.onnx`
+  - `model/armor_keypoint_640x512.xml` + `model/armor_keypoint_640x512.bin`
 
 ## 对外接口
 
@@ -31,7 +31,8 @@
 - `PnPSolver` 现在直接吃编译期 `CameraInfo`
 - detector 解码阶段不再使用并行数组和散落的输出列号
 - `model_profile` 只切换检测器 adapter；后面的候选结构、PnP、tracker 和 Aimer 不跟着分叉
-- `YOLO_KEYPOINT_640X640` 使用 640x640 等比缩放输入，`DIRECT_KEYPOINT_640X512` 使用 640x512 直接缩放输入
+- `YOLO_KEYPOINT_640X640` 使用 640x640 等比缩放输入和 YOLO keypoint 解码
+- `DIRECT_KEYPOINT_640X512` 是默认 profile，使用 640x512 直接缩放输入、dense-grid keypoint 解码和 topK 交叠抑制
 - detector 发布 `armors_frame` 时不再额外复制一份 imu/pose 缓冲
 - `ArmorDetectorResult` 保留诊断字段：
   - `raw_points / refined` 用于区分网络原始角点和传统细化后的角点

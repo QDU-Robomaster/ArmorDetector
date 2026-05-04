@@ -191,12 +191,13 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
 {
   std::vector<NetworkDetection> detections;
   const ArmorColor target_color = detail::detect_color_from_config(cfg_.detect_color);
-  const auto profile_spec = detail::ProfileSpecFor(cfg_.yolo.model_profile);
 
   cv::Mat output_rows = output;
   cv::Mat transposed_output;
-  if (output_rows.cols != detail::OutputLayout::number_end &&
-      output_rows.rows == detail::OutputLayout::number_end)
+  const int expected_output_cols =
+      detail::OutputColumnCountFor(cfg_.yolo.model_profile);
+  if (output_rows.cols != expected_output_cols &&
+      output_rows.rows == expected_output_cols)
   {
     cv::transpose(output_rows, transposed_output);
     output_rows = transposed_output;
@@ -204,15 +205,11 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
 
   for (int row = 0; row < output_rows.rows; ++row)
   {
-    if (output_rows.cols <= detail::OutputLayout::objectness_index)
+    if (output_rows.cols <= detail::OutputLayout::objectness_index &&
+        output_rows.cols <= detail::DirectKeypointOutputLayout::objectness_index)
     {
       continue;
     }
-
-    const double objectness =
-        output_rows.at<float>(row, detail::OutputLayout::objectness_index);
-    const double score = 1.0 / (1.0 + std::exp(-objectness));
-    counters_.max_objectness = std::max(counters_.max_objectness, score);
 
     const auto detection = DecodeNetworkDetection(mapping, output_rows, row);
     if (!detection.has_value())
@@ -220,28 +217,19 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
       continue;
     }
 
+    counters_.max_objectness =
+        std::max(counters_.max_objectness,
+                 static_cast<double>(detection->confidence));
     detections.emplace_back(*detection);
   }
   counters_.decoded_count = static_cast<uint32_t>(detections.size());
 
-  std::vector<cv::Rect> boxes;
-  std::vector<float> confidences;
-  boxes.reserve(detections.size());
-  confidences.reserve(detections.size());
-  for (const auto& detection : detections)
-  {
-    boxes.emplace_back(
-        detail::ExpandRect(detection.box, profile_spec.nms_box_padding_ratio));
-    confidences.emplace_back(detection.confidence);
-  }
-  if (boxes.empty())
+  if (detections.empty())
   {
     return {};
   }
 
-  std::vector<int> indices;
-  cv::dnn::NMSBoxes(boxes, confidences, static_cast<float>(cfg_.yolo.score_threshold),
-                    static_cast<float>(cfg_.yolo.nms_threshold), indices);
+  const std::vector<int> indices = SelectDetectionsAfterOverlapSuppression(detections);
   counters_.nms_count = static_cast<uint32_t>(indices.size());
 
   std::vector<CandidateArmor> armors;
@@ -295,6 +283,87 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   }
 
   return armors;
+}
+
+/**
+ * @brief 执行当前 profile 的交叠抑制。
+ *
+ * YOLO keypoint profile 使用 OpenCV IoU NMS。direct-keypoint profile 的源模型后处理
+ * 是先按 confidence 降序取前 128 个候选，再丢弃与已保留候选有任意 bbox 交叠的框；
+ * 这里复现这个语义，避免把 dense-grid 模型误套成 IoU NMS。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param detections 已解码候选。
+ * @return 保留候选下标。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+std::vector<int>
+ArmorDetector<CameraInfoV>::SelectDetectionsAfterOverlapSuppression(
+    const std::vector<NetworkDetection>& detections) const
+{
+  if (detections.empty())
+  {
+    return {};
+  }
+
+  if (cfg_.yolo.model_profile != DetectorProfile::DIRECT_KEYPOINT_640X512)
+  {
+    const auto profile_spec = detail::ProfileSpecFor(cfg_.yolo.model_profile);
+    std::vector<cv::Rect> boxes;
+    std::vector<float> confidences;
+    boxes.reserve(detections.size());
+    confidences.reserve(detections.size());
+    for (const auto& detection : detections)
+    {
+      boxes.emplace_back(
+          detail::ExpandRect(detection.box, profile_spec.nms_box_padding_ratio));
+      confidences.emplace_back(detection.confidence);
+    }
+
+    std::vector<int> indices;
+    cv::dnn::NMSBoxes(boxes, confidences,
+                      static_cast<float>(cfg_.yolo.score_threshold),
+                      static_cast<float>(cfg_.yolo.nms_threshold), indices);
+    return indices;
+  }
+
+  std::vector<DetectionSelection> ordered;
+  ordered.reserve(detections.size());
+  for (std::size_t index = 0; index < detections.size(); ++index)
+  {
+    ordered.push_back({index, detections[index].confidence, detections[index].box});
+  }
+
+  std::sort(ordered.begin(), ordered.end(),
+            [](const DetectionSelection& lhs, const DetectionSelection& rhs)
+            {
+              return lhs.confidence > rhs.confidence;
+            });
+
+  std::vector<int> indices;
+  indices.reserve(std::min<std::size_t>(
+      ordered.size(), static_cast<std::size_t>(detail::direct_keypoint_keep_topk)));
+  const std::size_t limit = std::min<std::size_t>(
+      ordered.size(), static_cast<std::size_t>(detail::direct_keypoint_keep_topk));
+  for (std::size_t ordered_index = 0; ordered_index < limit; ++ordered_index)
+  {
+    const auto& candidate = ordered[ordered_index];
+    bool overlaps = false;
+    for (const int kept_index : indices)
+    {
+      if ((candidate.box & detections[kept_index].box).area() > 0)
+      {
+        overlaps = true;
+        break;
+      }
+    }
+    if (!overlaps)
+    {
+      indices.push_back(static_cast<int>(candidate.index));
+    }
+  }
+
+  return indices;
 }
 
 /**
@@ -371,9 +440,10 @@ ArmorDetector<CameraInfoV>::DecodeYoloKeypointDetection(
 }
 
 /**
- * @brief 解码 direct-keypoint profile 的单行输出。
+ * @brief 解码 dense-grid keypoint profile 的单行输出。
  *
- * direct profile 使用拉伸输入和不同类别映射；角点同样在此统一成 detector 顺序。
+ * dense-grid profile 使用拉伸输入；每行先由网格中心和 stride 还原到模型输入坐标，
+ * 再统一成 detector/PnP 使用的左上、右上、右下、左下顺序。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param mapping 网络输入到 detector 图像的坐标映射。
@@ -386,28 +456,47 @@ std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
 ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
     const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const
 {
-  if (output.cols < detail::OutputLayout::number_end)
+  if (output.cols < detail::direct_keypoint_output_width ||
+      row >= detail::direct_keypoint_candidate_count)
   {
     return std::nullopt;
   }
 
-  double score = output.at<float>(row, detail::OutputLayout::objectness_index);
-  score = 1.0 / (1.0 + std::exp(-score));
+  const double score =
+      output.at<float>(row, detail::DirectKeypointOutputLayout::objectness_index);
   if (score < cfg_.yolo.score_threshold)
   {
     return std::nullopt;
   }
 
-  const int color_id = detail::ArgMaxRowRange(
-      output, row, detail::OutputLayout::color_begin, detail::OutputLayout::color_end);
+  const int color_id =
+      detail::ArgMaxRowRange(output, row,
+                             detail::DirectKeypointOutputLayout::color_begin,
+                             detail::DirectKeypointOutputLayout::color_end);
   const int class_id = detail::ArgMaxRowRange(
-      output, row, detail::OutputLayout::number_begin, detail::OutputLayout::number_end);
+      output, row, detail::DirectKeypointOutputLayout::number_begin,
+      detail::DirectKeypointOutputLayout::number_end);
 
-  const std::array<cv::Point2f, 4> raw_points = {
-      mapping.MapToSource(output.at<float>(row, 0), output.at<float>(row, 1)),
-      mapping.MapToSource(output.at<float>(row, 2), output.at<float>(row, 3)),
-      mapping.MapToSource(output.at<float>(row, 4), output.at<float>(row, 5)),
-      mapping.MapToSource(output.at<float>(row, 6), output.at<float>(row, 7))};
+  const auto cell = detail::DirectKeypointGridCellForRow(row);
+  std::array<cv::Point2f, 4> raw_points{};
+  for (int point_index = 0; point_index < 4; ++point_index)
+  {
+    const float x =
+        output.at<float>(row,
+                         detail::DirectKeypointOutputLayout::point_begin +
+                             point_index * 2) *
+            static_cast<float>(cell.stride * 2) +
+        static_cast<float>(cell.center_x);
+    const float y =
+        output.at<float>(row,
+                         detail::DirectKeypointOutputLayout::point_begin +
+                             point_index * 2 + 1) *
+            static_cast<float>(cell.stride * 2) +
+        static_cast<float>(cell.center_y);
+    raw_points[static_cast<std::size_t>(point_index)] = mapping.MapToSource(x, y);
+  }
+
+  std::swap(raw_points[2], raw_points[3]);
   const auto points = detail::sort_keypoints(raw_points);
   if (cfg_.yolo.enable_quad_check &&
       !detail::IsUsableQuad(points, cfg_.yolo.min_quad_area_px))
@@ -417,8 +506,7 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
 
   NetworkDetection detection;
   detection.color = detail::color_from_direct_keypoint_id(color_id);
-  const int target_id = detail::direct_keypoint_target_id_from_class_id(class_id);
-  detection.number = detail::number_from_direct_keypoint_target_id(target_id);
+  detection.number = detail::number_from_direct_keypoint_class_id(class_id);
   detection.confidence = static_cast<float>(score);
   detection.points = points;
   detection.box = detail::bounding_rect_from_points(detection.points);

@@ -51,10 +51,10 @@ class OpenVinoArmorNetwork
           .set_layout("NHWC")
           .set_color_format(ov::preprocess::ColorFormat::BGR);
       input.model().set_layout("NCHW");
-      input.preprocess()
-          .convert_element_type(ov::element::f32)
-          .convert_color(ov::preprocess::ColorFormat::RGB)
-          .scale(255.0);
+      auto& preprocess = input.preprocess();
+      preprocess.convert_element_type(ov::element::f32);
+      preprocess.convert_color(ov::preprocess::ColorFormat::RGB);
+      preprocess.scale(255.0);
 
       model = post_processor.build();
       compiled_model_ = ov_core_.compile_model(
