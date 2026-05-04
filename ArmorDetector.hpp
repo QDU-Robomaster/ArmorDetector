@@ -12,19 +12,25 @@ constructor_args:
       min_lightbar_ratio: 1.5
       max_lightbar_ratio: 20.0
       min_lightbar_length: 8.0
+      refine_mode: detail::CornerRefineMode::PAIR_ROI
     yolo:
       use_roi: false
       roi_x: 420
       roi_y: 50
       roi_width: 600
       roi_height: 600
-      use_traditional_refine: true
+      use_traditional_refine: false
       score_threshold: 0.1
       nms_threshold: 0.0
       min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
       model_profile: detail::DetectorProfile::DIRECT_KEYPOINT_640X512
+      direct_point_order: detail::DirectKeypointPointOrder::DECLARED_ORDER
+      pnp_strategy: detail::PnpSolveStrategy::IPPE_ONLY
+      input_scale: 255.0
+      openvino_device: "AUTO_DETECT"
+      openvino_performance_mode: "LATENCY"
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -139,6 +145,8 @@ class ArmorDetector : public LibXR::Application
     double min_lightbar_ratio{1.5};       ///< 灯条长宽比下限。
     double max_lightbar_ratio{20.0};      ///< 灯条长宽比上限。
     double min_lightbar_length{8.0};      ///< 灯条最小长度，单位 px。
+    /// 传统角点细化策略。
+    detail::CornerRefineMode refine_mode{detail::CornerRefineMode::PAIR_ROI};
   };
 
   /**
@@ -151,7 +159,7 @@ class ArmorDetector : public LibXR::Application
     int roi_y{50};                       ///< ROI 左上角 y。
     int roi_width{600};                  ///< ROI 宽度；负值表示全图宽度。
     int roi_height{600};                 ///< ROI 高度；负值表示全图高度。
-    bool use_traditional_refine{true};   ///< 是否启用传统灯条角点细化。
+    bool use_traditional_refine{false};  ///< 是否启用传统灯条角点细化。
     double score_threshold{0.1};         ///< 网络目标置信度门限。
     double nms_threshold{0.0};           ///< NMS IoU 门限；dense-grid profile 不使用该值。
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
@@ -159,6 +167,17 @@ class ArmorDetector : public LibXR::Application
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
     /// 模型/decoder profile。
     DetectorProfile model_profile{DetectorProfile::DIRECT_KEYPOINT_640X512};
+    /// dense-grid 角点输出转 detector 统一顺序的策略。
+    detail::DirectKeypointPointOrder direct_point_order{
+        detail::DirectKeypointPointOrder::DECLARED_ORDER};
+    /// PnP 求解策略。
+    detail::PnpSolveStrategy pnp_strategy{detail::PnpSolveStrategy::IPPE_ONLY};
+    /// OpenVINO preprocessor 输入缩放因子；255.0 表示 /255，1.0 表示不缩放。
+    double input_scale{255.0};
+    /// OpenVINO 编译设备；"AUTO_DETECT" 按 NPU、GPU、CPU 顺序自动选择。
+    const char* openvino_device{"AUTO_DETECT"};
+    /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
+    const char* openvino_performance_mode{"LATENCY"};
   };
 
   /**
@@ -406,6 +425,23 @@ class ArmorDetector : public LibXR::Application
    * @return 找到匹配灯条对并更新角点时返回 true。
    */
   bool RefineArmorCorners(CandidateArmor& armor, const cv::Mat& bgr_img);
+
+  /**
+   * @brief 当前实现的单 ROI 灯条对角点细化。
+   * @param armor 待细化候选，成功时会原地更新角点/中心/box。
+   * @param bgr_img detector 源图像。
+   * @return 找到匹配灯条对并更新角点时返回 true。
+   */
+  bool RefineArmorCornersPairRoi(CandidateArmor& armor, const cv::Mat& bgr_img);
+
+  /**
+   * @brief 左右分 ROI 加权选择灯条的源参考角点细化。
+   * @param armor 待细化候选，成功时会原地更新角点/中心/box。
+   * @param bgr_img detector 源图像。
+   * @return 左右灯条均匹配并通过最终一致性检查时返回 true。
+   */
+  bool RefineArmorCornersSplitRoiWeighted(CandidateArmor& armor,
+                                          const cv::Mat& bgr_img);
 
   /**
    * @brief 在诊断开关开启时保存角点细化失败现场。

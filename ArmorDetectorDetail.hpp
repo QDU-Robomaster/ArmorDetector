@@ -87,6 +87,24 @@ enum class DetectorProfile : uint8_t
 };
 
 /**
+ * @brief dense-grid keypoint 输出角点转 detector 统一角点的策略。
+ */
+enum class DirectKeypointPointOrder : uint8_t
+{
+  CANONICAL_SORT = 0, ///< 按像素几何排序为左上、右上、右下、左下。
+  DECLARED_ORDER = 1, ///< 信任模型声明顺序，仅做固定下标重排。
+};
+
+/**
+ * @brief 传统角点细化策略。
+ */
+enum class CornerRefineMode : uint8_t
+{
+  PAIR_ROI = 0,        ///< 当前实现：一个装甲板 ROI 内找灯条对。
+  SPLIT_ROI_WEIGHTED = 1, ///< 源参考实现：左右灯条分 ROI 并加权选择。
+};
+
+/**
  * @brief 输入图像 resize 策略。
  */
 enum class ResizeMode : uint8_t
@@ -135,6 +153,42 @@ inline DetectorProfileSpec ProfileSpecFor(DetectorProfile profile)
 inline const char* DetectorProfileName(DetectorProfile profile)
 {
   return ProfileSpecFor(profile).name;
+}
+
+/**
+ * @brief 查询 dense-grid 角点顺序策略名称。
+ * @param order 角点顺序策略。
+ * @return 稳定日志名称。
+ */
+inline const char* DirectKeypointPointOrderName(DirectKeypointPointOrder order)
+{
+  switch (order)
+  {
+    case DirectKeypointPointOrder::CANONICAL_SORT:
+      return "canonical_sort";
+    case DirectKeypointPointOrder::DECLARED_ORDER:
+      return "declared_order";
+    default:
+      return "unknown";
+  }
+}
+
+/**
+ * @brief 查询传统角点细化策略名称。
+ * @param mode 细化策略。
+ * @return 稳定日志名称。
+ */
+inline const char* CornerRefineModeName(CornerRefineMode mode)
+{
+  switch (mode)
+  {
+    case CornerRefineMode::PAIR_ROI:
+      return "pair_roi";
+    case CornerRefineMode::SPLIT_ROI_WEIGHTED:
+      return "split_roi_weighted";
+    default:
+      return "unknown";
+  }
 }
 
 /**
@@ -588,6 +642,21 @@ inline std::array<cv::Point2f, 4> sort_keypoints(
             });
 
   return {top_points[0], top_points[1], bottom_points[1], bottom_points[0]};
+}
+
+/**
+ * @brief 将 dense-grid 声明顺序固定映射到 detector/PnP 统一顺序。
+ *
+ * dense-grid 2025 模型在交换第 2/3 个点后声明顺序为左上、左下、右下、
+ * 右上；detector 统一使用左上、右上、右下、左下。
+ *
+ * @param keypoints 已按源实现交换第 2/3 点后的四点。
+ * @return 左上、右上、右下、左下顺序。
+ */
+inline std::array<cv::Point2f, 4> direct_keypoint_declared_to_canonical(
+    const std::array<cv::Point2f, 4>& keypoints)
+{
+  return {keypoints[0], keypoints[3], keypoints[2], keypoints[1]};
 }
 
 /**

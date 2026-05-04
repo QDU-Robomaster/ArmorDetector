@@ -67,10 +67,85 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
     }
     return fallback;
   };
+  auto parse_env_f64 = [](const char* name, double fallback) -> double
+  {
+    if (const char* env = std::getenv(name))
+    {
+      if (env[0] == '\0')
+      {
+        return fallback;
+      }
+      char* end = nullptr;
+      const double parsed = std::strtod(env, &end);
+      if (end != env && std::isfinite(parsed) && parsed > 0.0)
+      {
+        return parsed;
+      }
+    }
+    return fallback;
+  };
+  auto env_text = [](const char* name) -> const char*
+  {
+    const char* env = std::getenv(name);
+    return (env != nullptr && env[0] != '\0') ? env : nullptr;
+  };
 
   cfg_ = cfg;
   counters_ = {};
   diagnostics_ = {};
+  cfg_.yolo.input_scale =
+      parse_env_f64("XR_ARMOR_DETECTOR_INPUT_SCALE", cfg_.yolo.input_scale);
+  if (const char* env = env_text("XR_ARMOR_DETECTOR_DIRECT_POINT_ORDER"))
+  {
+    const std::string value(env);
+    if (value == "declared" || value == "declared_order")
+    {
+      cfg_.yolo.direct_point_order =
+          detail::DirectKeypointPointOrder::DECLARED_ORDER;
+    }
+    else if (value == "sort" || value == "canonical_sort")
+    {
+      cfg_.yolo.direct_point_order =
+          detail::DirectKeypointPointOrder::CANONICAL_SORT;
+    }
+    else
+    {
+      XR_LOG_WARN("ArmorDetector unknown direct point order %s", env);
+    }
+  }
+  if (const char* env = env_text("XR_ARMOR_DETECTOR_CORNER_REFINE_MODE"))
+  {
+    const std::string value(env);
+    if (value == "split" || value == "split_roi_weighted")
+    {
+      cfg_.traditional.refine_mode =
+          detail::CornerRefineMode::SPLIT_ROI_WEIGHTED;
+    }
+    else if (value == "pair" || value == "pair_roi")
+    {
+      cfg_.traditional.refine_mode = detail::CornerRefineMode::PAIR_ROI;
+    }
+    else
+    {
+      XR_LOG_WARN("ArmorDetector unknown corner refine mode %s", env);
+    }
+  }
+  if (const char* env = env_text("XR_ARMOR_DETECTOR_PNP_STRATEGY"))
+  {
+    const std::string value(env);
+    if (value == "ippe" || value == "ippe_only")
+    {
+      cfg_.yolo.pnp_strategy = detail::PnpSolveStrategy::IPPE_ONLY;
+    }
+    else if (value == "robust")
+    {
+      cfg_.yolo.pnp_strategy = detail::PnpSolveStrategy::ROBUST;
+    }
+    else
+    {
+      XR_LOG_WARN("ArmorDetector unknown PnP strategy %s", env);
+    }
+  }
 
   diagnostics_.audit_every_frame =
       parse_env_flag("ARMOR_DETECTOR_AUDIT_EVERY_FRAME");
@@ -113,9 +188,28 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
     model_path = ARMOR_DETECTOR_DIRECT_KEYPOINT_MODEL_PATH;
   }
 
-  XR_LOG_INFO("ArmorDetector profile=%s model=%s",
-              detail::DetectorProfileName(cfg_.yolo.model_profile), model_path);
-  network_.Configure(cfg_.yolo.model_profile, model_path);
+  const char* openvino_device = cfg_.yolo.openvino_device;
+  if (openvino_device == nullptr || openvino_device[0] == '\0')
+  {
+    openvino_device = "CPU";
+  }
+  const char* openvino_performance_mode = cfg_.yolo.openvino_performance_mode;
+  if (openvino_performance_mode == nullptr ||
+      openvino_performance_mode[0] == '\0')
+  {
+    openvino_performance_mode = "LATENCY";
+  }
+
+  XR_LOG_INFO(
+      "ArmorDetector profile=%s device=%s mode=%s input_scale=%.6f "
+      "point_order=%s refine_mode=%s pnp=%s model=%s",
+              detail::DetectorProfileName(cfg_.yolo.model_profile),
+      openvino_device, openvino_performance_mode, cfg_.yolo.input_scale,
+      detail::DirectKeypointPointOrderName(cfg_.yolo.direct_point_order),
+      detail::CornerRefineModeName(cfg_.traditional.refine_mode),
+      detail::PnpSolveStrategyName(cfg_.yolo.pnp_strategy), model_path);
+  network_.Configure(cfg_.yolo.model_profile, model_path, openvino_device,
+                     openvino_performance_mode, cfg_.yolo.input_scale);
 }
 
 /**

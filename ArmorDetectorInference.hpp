@@ -497,7 +497,11 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
   }
 
   std::swap(raw_points[2], raw_points[3]);
-  const auto points = detail::sort_keypoints(raw_points);
+  const auto points =
+      (cfg_.yolo.direct_point_order ==
+       detail::DirectKeypointPointOrder::DECLARED_ORDER)
+          ? detail::direct_keypoint_declared_to_canonical(raw_points)
+          : detail::sort_keypoints(raw_points);
   if (cfg_.yolo.enable_quad_check &&
       !detail::IsUsableQuad(points, cfg_.yolo.min_quad_area_px))
   {

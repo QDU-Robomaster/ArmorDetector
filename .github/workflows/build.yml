@@ -159,6 +159,8 @@ jobs:
                     score_threshold: 0.7
                     nms_threshold: 0.3
                     min_confidence: 0.8
+                    openvino_device: CPU
+                    openvino_performance_mode: LATENCY
                 sync: '@camera_frame_sync'
           EOF
           cat detector_ci.yaml

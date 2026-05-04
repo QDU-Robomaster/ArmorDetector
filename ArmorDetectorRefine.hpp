@@ -77,6 +77,29 @@ bool ArmorDetector<CameraInfoV>::RefineArmorCorners(
     CandidateArmor& armor, const cv::Mat& bgr_img)
 {
   ++counters_.refine_attempt_count;
+  if (cfg_.traditional.refine_mode ==
+      detail::CornerRefineMode::SPLIT_ROI_WEIGHTED)
+  {
+    return RefineArmorCornersSplitRoiWeighted(armor, bgr_img);
+  }
+  return RefineArmorCornersPairRoi(armor, bgr_img);
+}
+
+/**
+ * @brief 用单个装甲板 ROI 内的灯条对细化网络角点。
+ *
+ * 该实现是当前本模块的原有策略：先从网络四点向外扩展一个整体 ROI，再在 ROI
+ * 内检测所有灯条并选择与网络左右灯条端点距离最近的一对。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待细化候选，成功时原地更新。
+ * @param bgr_img detector 源图像。
+ * @return 成功找到灯条对并更新角点时返回 true。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+bool ArmorDetector<CameraInfoV>::RefineArmorCornersPairRoi(
+    CandidateArmor& armor, const cv::Mat& bgr_img)
+{
   const cv::Point2f top_left = armor.points[0];
   const cv::Point2f top_right = armor.points[1];
   const cv::Point2f bottom_right = armor.points[2];
@@ -188,6 +211,204 @@ bool ArmorDetector<CameraInfoV>::RefineArmorCorners(
   armor.points[1] = closest_right->top + roi_offset;
   armor.points[2] = closest_right->bottom + roi_offset;
   armor.points[3] = closest_left->bottom + roi_offset;
+  armor.center = detail::quad_center(armor.points);
+  armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
+  armor.box = cv::boundingRect(
+      std::vector<cv::Point2f>(armor.points.begin(), armor.points.end()));
+  armor.refined = true;
+  UpdateGeometryMetrics(armor);
+  return true;
+}
+
+/**
+ * @brief 用左右分离 ROI 和加权灯条选择细化网络角点。
+ *
+ * 该策略对齐源参考实现的核心语义：从网络给出的左右灯条位置分别生成 ROI，
+ * 灰度阈值后在左右 ROI 内各自选择中心、长度和角度最匹配的一条灯条，再用
+ * 两条灯条的端点更新装甲板四角。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待细化候选，成功时原地更新。
+ * @param bgr_img detector 源图像。
+ * @return 左右灯条均匹配并通过最终一致性检查时返回 true。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+bool ArmorDetector<CameraInfoV>::RefineArmorCornersSplitRoiWeighted(
+    CandidateArmor& armor, const cv::Mat& bgr_img)
+{
+  const cv::Point2f left_top = armor.points[0];
+  const cv::Point2f right_top = armor.points[1];
+  const cv::Point2f right_bottom = armor.points[2];
+  const cv::Point2f left_bottom = armor.points[3];
+  const cv::Point2f left_center = (left_top + left_bottom) * 0.5F;
+  const cv::Point2f right_center = (right_top + right_bottom) * 0.5F;
+  const cv::Point2f left_vector = left_bottom - left_top;
+  const cv::Point2f right_vector = right_bottom - right_top;
+
+  auto vertical_angle_deg = [](const cv::Point2f& vector) -> double
+  {
+    double angle = std::abs(std::atan2(vector.x, vector.y)) / detail::deg2rad;
+    if (angle > 90.0)
+    {
+      angle = 180.0 - angle;
+    }
+    return angle;
+  };
+
+  auto make_light_roi = [](const cv::Point2f& center,
+                           const cv::Point2f& vector) -> cv::Rect
+  {
+    constexpr double roi_height_multiplier = 0.5;
+    constexpr double roi_width_multiplier = 0.5;
+    constexpr int min_roi_size = 20;
+    constexpr double min_light_height = 10.0;
+    constexpr double max_light_height = 120.0;
+
+    const double expected_height = std::abs(vector.y);
+    const double expected_width = std::abs(vector.x);
+    const double clamped_length =
+        std::max(min_light_height,
+                 std::min(expected_height, max_light_height));
+    const int width = std::max(
+        min_roi_size,
+        static_cast<int>(std::round(expected_width +
+                                    clamped_length * roi_width_multiplier)));
+    const int height = std::max(
+        min_roi_size,
+        static_cast<int>(std::round(expected_height +
+                                    clamped_length * roi_height_multiplier)));
+    return {static_cast<int>(std::round(center.x - width * 0.5)),
+            static_cast<int>(std::round(center.y - height * 0.5)), width,
+            height};
+  };
+
+  const cv::Rect full_image(0, 0, bgr_img.cols, bgr_img.rows);
+  const cv::Rect left_roi_raw = make_light_roi(left_center, left_vector);
+  const cv::Rect right_roi_raw = make_light_roi(right_center, right_vector);
+  const cv::Rect left_roi = left_roi_raw & full_image;
+  const cv::Rect right_roi = right_roi_raw & full_image;
+  if (left_roi != left_roi_raw || right_roi != right_roi_raw ||
+      left_roi.empty() || right_roi.empty())
+  {
+    ++counters_.refine_fail_bbox_oob_count;
+    return false;
+  }
+
+  auto build_gray_binary = [this](const cv::Mat& roi_img) -> cv::Mat
+  {
+    cv::Mat gray_img;
+    cv::cvtColor(roi_img, gray_img, cv::COLOR_BGR2GRAY);
+    cv::Mat binary_img;
+    cv::threshold(gray_img, binary_img, cfg_.traditional.threshold, 255,
+                  cv::THRESH_BINARY);
+    return binary_img;
+  };
+
+  const cv::Mat left_img = bgr_img(left_roi);
+  const cv::Mat right_img = bgr_img(right_roi);
+  if (left_img.empty() || right_img.empty())
+  {
+    ++counters_.refine_fail_roi_empty_count;
+    return false;
+  }
+
+  const cv::Mat left_binary = build_gray_binary(left_img);
+  const cv::Mat right_binary = build_gray_binary(right_img);
+  auto left_lights = DetectLightbars(left_img, left_binary);
+  auto right_lights = DetectLightbars(right_img, right_binary);
+  if (left_lights.empty() || right_lights.empty())
+  {
+    if (left_lights.empty() && right_lights.empty())
+    {
+      ++counters_.refine_fail_lightbar_zero_count;
+    }
+    else
+    {
+      ++counters_.refine_fail_lightbar_one_count;
+    }
+    return false;
+  }
+
+  auto select_best = [&](const std::vector<Lightbar>& lights,
+                         const cv::Point2f& roi_offset,
+                         const cv::Point2f& expected_center,
+                         const cv::Point2f& expected_vector)
+      -> std::optional<Lightbar>
+  {
+    constexpr double center_distance_weight = 0.2;
+    constexpr double length_difference_weight = 0.7;
+    constexpr double angle_difference_weight = 0.1;
+    constexpr double max_score = 0.3;
+    const double expected_height =
+        std::max(1.0, static_cast<double>(std::abs(expected_vector.y)));
+    const double expected_angle = vertical_angle_deg(expected_vector);
+
+    double best_score = std::numeric_limits<double>::infinity();
+    std::optional<Lightbar> best_light;
+    for (auto light : lights)
+    {
+      light.center += roi_offset;
+      light.top += roi_offset;
+      light.bottom += roi_offset;
+      const double center_distance =
+          cv::norm(light.center - expected_center) / expected_height;
+      const double length_difference =
+          std::abs(light.length - expected_height) / expected_height;
+      const double angle_difference =
+          std::abs(vertical_angle_deg(light.bottom - light.top) -
+                   expected_angle) /
+          90.0;
+      const double score = center_distance * center_distance_weight +
+                           length_difference * length_difference_weight +
+                           angle_difference * angle_difference_weight;
+      if (score < best_score)
+      {
+        best_score = score;
+        best_light = light;
+      }
+    }
+
+    if (!best_light.has_value() || best_score > max_score)
+    {
+      return std::nullopt;
+    }
+    return best_light;
+  };
+
+  const auto left_light =
+      select_best(left_lights,
+                  {static_cast<float>(left_roi.x),
+                   static_cast<float>(left_roi.y)},
+                  left_center, left_vector);
+  const auto right_light =
+      select_best(right_lights,
+                  {static_cast<float>(right_roi.x),
+                   static_cast<float>(right_roi.y)},
+                  right_center, right_vector);
+  if (!left_light.has_value() || !right_light.has_value())
+  {
+    ++counters_.refine_fail_pair_distance_count;
+    return false;
+  }
+
+  const double left_length = left_light->length;
+  const double right_length = right_light->length;
+  const double length_ratio =
+      std::min(left_length, right_length) /
+      std::max(std::max(left_length, right_length), 1e-6);
+  const double angle_diff =
+      std::abs(vertical_angle_deg(left_light->bottom - left_light->top) -
+               vertical_angle_deg(right_light->bottom - right_light->top));
+  if (length_ratio < 0.7 || angle_diff > 5.0)
+  {
+    ++counters_.refine_fail_pair_distance_count;
+    return false;
+  }
+
+  armor.points[0] = left_light->top;
+  armor.points[1] = right_light->top;
+  armor.points[2] = right_light->bottom;
+  armor.points[3] = left_light->bottom;
   armor.center = detail::quad_center(armor.points);
   armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
   armor.box = cv::boundingRect(

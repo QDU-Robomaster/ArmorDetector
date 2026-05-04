@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -16,6 +17,38 @@
 
 #include "CameraBase.hpp"
 #include "armor.hpp"
+
+namespace armor_detector_detail
+{
+
+/**
+ * @brief PnP 求解策略。
+ */
+enum class PnpSolveStrategy : uint8_t
+{
+  ROBUST = 0,   ///< IPPE 多候选 + ITERATIVE/EPNP fallback + LM refine。
+  IPPE_ONLY = 1, ///< 单次 IPPE 求解，不做 fallback/refine。
+};
+
+/**
+ * @brief 查询 PnP 策略名称。
+ * @param strategy PnP 策略。
+ * @return 稳定日志名称。
+ */
+inline const char* PnpSolveStrategyName(PnpSolveStrategy strategy)
+{
+  switch (strategy)
+  {
+    case PnpSolveStrategy::ROBUST:
+      return "robust";
+    case PnpSolveStrategy::IPPE_ONLY:
+      return "ippe_only";
+    default:
+      return "unknown";
+  }
+}
+
+}  // namespace armor_detector_detail
 
 /**
  * @brief 将装甲板四个图像角点求解为相机坐标系位姿。
@@ -59,7 +92,9 @@ class PnPSolver
   [[nodiscard]] bool SolvePnP(const std::array<cv::Point2f, 4>& image_armor_points,
                               ArmorType armor_type, cv::Mat& rvec,
                               cv::Mat& tvec,
-                              double* reprojection_error_px = nullptr) const;
+                              double* reprojection_error_px = nullptr,
+                              armor_detector_detail::PnpSolveStrategy strategy =
+                                  armor_detector_detail::PnpSolveStrategy::ROBUST) const;
 
   /**
    * @brief 计算图像点到相机主点的像素距离。
@@ -212,7 +247,8 @@ std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_m
 template <CameraTypes::CameraInfo CameraInfoV>
 bool PnPSolver<CameraInfoV>::SolvePnP(
     const std::array<cv::Point2f, 4>& image_armor_points, ArmorType armor_type,
-    cv::Mat& rvec, cv::Mat& tvec, double* reprojection_error_px) const
+    cv::Mat& rvec, cv::Mat& tvec, double* reprojection_error_px,
+    armor_detector_detail::PnpSolveStrategy strategy) const
 {
   if (reprojection_error_px != nullptr)
   {
@@ -233,6 +269,44 @@ bool PnPSolver<CameraInfoV>::SolvePnP(
   double best_error = std::numeric_limits<double>::infinity();
   const std::vector<cv::Point2f> image_points = {
       base_points[0], base_points[1], base_points[2], base_points[3]};
+
+  if (strategy == armor_detector_detail::PnpSolveStrategy::IPPE_ONLY)
+  {
+    cv::Mat candidate_rvec;
+    cv::Mat candidate_tvec;
+    if (!cv::solvePnP(object_points, image_points, camera_matrix_, dist_coeffs_,
+                      candidate_rvec, candidate_tvec, false, cv::SOLVEPNP_IPPE))
+    {
+      return false;
+    }
+
+    if (candidate_rvec.empty() || candidate_tvec.empty())
+    {
+      return false;
+    }
+
+    const double z = candidate_tvec.at<double>(2);
+    if (!std::isfinite(z) || z <= 1e-6)
+    {
+      return false;
+    }
+
+    const double reprojection_error =
+        ComputeReprojectionError(object_points, image_points, camera_matrix_,
+                                 dist_coeffs_, candidate_rvec, candidate_tvec);
+    if (!std::isfinite(reprojection_error))
+    {
+      return false;
+    }
+
+    rvec = candidate_rvec;
+    tvec = candidate_tvec;
+    if (reprojection_error_px != nullptr)
+    {
+      *reprojection_error_px = reprojection_error;
+    }
+    return true;
+  }
 
   {
     std::vector<cv::Mat> candidate_rvecs;

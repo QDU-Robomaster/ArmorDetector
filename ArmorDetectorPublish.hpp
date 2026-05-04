@@ -44,7 +44,8 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
     cv::Mat tvec;
     double pnp_reprojection_error_px = 0.0;
     if (pnp_solver_.SolvePnP(armor.points, armor.type, rvec, tvec,
-                             &pnp_reprojection_error_px))
+                             &pnp_reprojection_error_px,
+                             cfg_.yolo.pnp_strategy))
     {
       result.pnp_valid = true;
       result.pnp_reprojection_error_px = pnp_reprojection_error_px;
