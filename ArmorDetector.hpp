@@ -66,11 +66,16 @@ depends:
 #include "ArmorDetectorNetwork.hpp"
 
 #ifndef ARMOR_DETECTOR_MODEL_PATH
-/**
- * @brief OpenVINO dense-grid keypoint 模型路径宏。
- */
-#define ARMOR_DETECTOR_MODEL_PATH ""
+#define ARMOR_DETECTOR_MODEL_PATH nullptr
 #endif
+static_assert(
+    []() constexpr
+    {
+      const char* path = ARMOR_DETECTOR_MODEL_PATH;
+      return path != nullptr && path[0] != '\0';
+    }(),
+    "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt "
+    "as a non-empty OpenVINO model path.");
 
 /**
  * @brief 装甲板检测应用模块。
@@ -275,7 +280,8 @@ class ArmorDetector : public LibXR::Application
    * @return 通过置信度和四边形检查时返回检测单元。
    */
   std::optional<NetworkDetection> DecodeDirectKeypointDetection(
-      const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
+      const detail::NetworkInputMapping& mapping,
+      const detail::DirectKeypointOutputView& output, int row) const;
 
   /**
    * @brief 将网络检测单元转换为内部候选并计算基础几何指标。

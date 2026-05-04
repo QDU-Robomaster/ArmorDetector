@@ -155,24 +155,18 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   std::vector<NetworkDetection> detections;
   const ArmorColor target_color = detail::detect_color_from_config(cfg_.detect_color);
 
-  cv::Mat output_rows = output;
-  cv::Mat transposed_output;
-  constexpr int expected_output_cols = detail::direct_keypoint_output_width;
-  if (output_rows.cols != expected_output_cols &&
-      output_rows.rows == expected_output_cols)
+  const detail::DirectKeypointOutputView output_view(output);
+  if (!output_view.Valid())
   {
-    cv::transpose(output_rows, transposed_output);
-    output_rows = transposed_output;
+    XR_LOG_ERROR("ArmorDetector output shape invalid: rows=%d cols=%d type=%d",
+                 output.rows, output.cols, output.type());
+    ++counters_.discarded_count;
+    return {};
   }
 
-  for (int row = 0; row < output_rows.rows; ++row)
+  for (int row = 0; row < output_view.CandidateCount(); ++row)
   {
-    if (output_rows.cols <= detail::DirectKeypointOutputLayout::objectness_index)
-    {
-      continue;
-    }
-
-    const auto detection = DecodeDirectKeypointDetection(mapping, output_rows, row);
+    const auto detection = DecodeDirectKeypointDetection(mapping, output_view, row);
     if (!detection.has_value())
     {
       continue;
@@ -312,16 +306,16 @@ ArmorDetector<CameraInfoV>::SelectDetectionsAfterOverlapSuppression(
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
 ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
-    const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const
+    const detail::NetworkInputMapping& mapping,
+    const detail::DirectKeypointOutputView& output, int row) const
 {
-  if (output.cols < detail::direct_keypoint_output_width ||
-      row >= detail::direct_keypoint_candidate_count)
+  if (!output.Valid() || row >= output.CandidateCount())
   {
     return std::nullopt;
   }
 
   const double score =
-      output.at<float>(row, detail::DirectKeypointOutputLayout::objectness_index);
+      output.At(row, detail::DirectKeypointOutputLayout::objectness_index);
   if (score < cfg_.network.score_threshold)
   {
     return std::nullopt;
@@ -340,15 +334,13 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
   for (int point_index = 0; point_index < 4; ++point_index)
   {
     const float x =
-        output.at<float>(row,
-                         detail::DirectKeypointOutputLayout::point_begin +
-                             point_index * 2) *
+        output.At(row, detail::DirectKeypointOutputLayout::point_begin +
+                           point_index * 2) *
             static_cast<float>(cell.stride * 2) +
         static_cast<float>(cell.center_x);
     const float y =
-        output.at<float>(row,
-                         detail::DirectKeypointOutputLayout::point_begin +
-                             point_index * 2 + 1) *
+        output.At(row, detail::DirectKeypointOutputLayout::point_begin +
+                           point_index * 2 + 1) *
             static_cast<float>(cell.stride * 2) +
         static_cast<float>(cell.center_y);
     declared_points[static_cast<std::size_t>(point_index)] =

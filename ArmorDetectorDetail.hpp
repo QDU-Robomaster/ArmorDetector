@@ -184,20 +184,74 @@ inline DirectKeypointGridCell DirectKeypointGridCellForRow(int row)
 }
 
 /**
- * @brief 在输出矩阵某一行的指定列范围内取 argmax。
- * @param output 输出矩阵。
+ * @brief dense-grid 模型输出矩阵的轻量视图。
+ *
+ * 生产模型优先使用 `[21,6720]` channel-major 输出以避免图末尾 Transpose；
+ * 旧模型的 `[6720,21]` row-major 输出仍可被同一 decoder 读取。
+ */
+class DirectKeypointOutputView
+{
+ public:
+  explicit DirectKeypointOutputView(const cv::Mat& output) : output_(output)
+  {
+    if (output_.type() != CV_32F || output_.dims != 2)
+    {
+      return;
+    }
+
+    if (output_.rows == direct_keypoint_candidate_count &&
+        output_.cols >= direct_keypoint_output_width)
+    {
+      row_major_ = true;
+      valid_ = true;
+      return;
+    }
+
+    if (output_.rows >= direct_keypoint_output_width &&
+        output_.cols == direct_keypoint_candidate_count)
+    {
+      row_major_ = false;
+      valid_ = true;
+    }
+  }
+
+  [[nodiscard]] bool Valid() const { return valid_; }
+
+  [[nodiscard]] bool RowMajor() const { return row_major_; }
+
+  [[nodiscard]] int CandidateCount() const
+  {
+    return valid_ ? direct_keypoint_candidate_count : 0;
+  }
+
+  [[nodiscard]] float At(int row, int field) const
+  {
+    return row_major_ ? output_.at<float>(row, field)
+                      : output_.at<float>(field, row);
+  }
+
+ private:
+  const cv::Mat& output_;
+  bool valid_{false};
+  bool row_major_{true};
+};
+
+/**
+ * @brief 在输出视图某一候选的指定字段范围内取 argmax。
+ * @param output 输出视图。
  * @param row 行号。
  * @param begin 起始列，闭区间。
  * @param end 结束列，开区间。
  * @return 最大值列号减去 begin 后的类别 id。
  */
-inline int ArgMaxRowRange(const cv::Mat& output, int row, int begin, int end)
+inline int ArgMaxRowRange(const DirectKeypointOutputView& output, int row,
+                          int begin, int end)
 {
   int best = begin;
-  float best_value = output.at<float>(row, begin);
+  float best_value = output.At(row, begin);
   for (int index = begin + 1; index < end; ++index)
   {
-    const float value = output.at<float>(row, index);
+    const float value = output.At(row, index);
     if (value > best_value)
     {
       best_value = value;
