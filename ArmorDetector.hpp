@@ -61,7 +61,6 @@ depends:
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
-#include <openvino/openvino.hpp>
 
 #include "CameraFrameSync.hpp"
 #include "app_framework.hpp"
@@ -69,6 +68,8 @@ depends:
 #include "libxr.hpp"
 #include "logger.hpp"
 #include "pnp_solver.hpp"
+#include "ArmorDetectorDetail.hpp"
+#include "ArmorDetectorNetwork.hpp"
 
 template <CameraTypes::CameraInfo CameraInfoV>
 class ArmorDetector : public LibXR::Application
@@ -241,11 +242,7 @@ class ArmorDetector : public LibXR::Application
   LibXR::Thread sync_frame_thread_{};
   FrameCounters counters_{};
   DiagnosticOptions diagnostics_{};
-  bool model_ready_{false};
-
-  ov::Core ov_core_{};
-  ov::CompiledModel compiled_model_{};
-  ov::InferRequest infer_request_{};
+  detail::OpenVinoYoloArmorNetwork network_{};
 
   ArmorDetectionsPacket armors_packet_{};
   DetectionPacket armors_frame_packet_{};
@@ -260,5 +257,4 @@ class ArmorDetector : public LibXR::Application
       LibXR::Topic("metrics", sizeof(ArmorDetectorMetrics), &armor_domain_);
 };
 
-#include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorPipeline.hpp"
