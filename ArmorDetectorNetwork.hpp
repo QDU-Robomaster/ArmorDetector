@@ -8,17 +8,13 @@
 namespace armor_detector_detail
 {
 
-struct NetworkInputShape
-{
-  int width{yolo_input_size};
-  int height{yolo_input_size};
-};
-
-class OpenVinoYoloArmorNetwork
+class OpenVinoArmorNetwork
 {
  public:
-  bool Configure(const char* model_path)
+  bool Configure(DetectorProfile profile, const char* model_path)
   {
+    profile_ = profile;
+    input_shape_ = ProfileSpecFor(profile).input_shape;
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
@@ -52,13 +48,14 @@ class OpenVinoYoloArmorNetwork
     }
     catch (const std::exception& exception)
     {
-      XR_LOG_ERROR("ArmorDetector failed to load YOLOv5 model: %s",
-                   exception.what());
+      XR_LOG_ERROR("ArmorDetector failed to load %s model: %s",
+                   DetectorProfileName(profile_), exception.what());
       return false;
     }
   }
 
   [[nodiscard]] bool Ready() const { return model_ready_; }
+  [[nodiscard]] DetectorProfile Profile() const { return profile_; }
   [[nodiscard]] NetworkInputShape InputShape() const { return input_shape_; }
 
   bool Infer(const cv::Mat& input, cv::Mat& output)
@@ -102,6 +99,7 @@ class OpenVinoYoloArmorNetwork
   }
 
  private:
+  DetectorProfile profile_{DetectorProfile::SP_YOLOV5};
   bool model_ready_{false};
   NetworkInputShape input_shape_{};
   ov::Core ov_core_{};

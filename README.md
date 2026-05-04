@@ -13,6 +13,7 @@
 - 输出: `armor_detector/armors_result`、`armor_detector/armors_frame`、`armor_detector/metrics`
 - 模型:
   - `model/yolov5.xml` + `model/yolov5.bin`
+  - `model/SZU0526_fp32input_512x640_nopre_fixoutput.onnx`
 
 ## 对外接口
 
@@ -29,6 +30,8 @@
 - 不再需要独立 `NumberClassifier`
 - `PnPSolver` 现在直接吃编译期 `CameraInfo`
 - detector 解码阶段不再使用并行数组和散落的输出列号
+- `model_profile` 只切换检测器 adapter；后面的候选结构、PnP、tracker 和 Aimer 不跟着分叉
+- `SP_YOLOV5` 使用 640x640 等比缩放输入，`SHTECH_SZU0526` 使用 640x512 直接缩放输入
 - detector 发布 `armors_frame` 时不再额外复制一份 imu/pose 缓冲
 - `ArmorDetectorResult` 保留诊断字段：
   - `raw_points / refined` 用于区分网络原始角点和传统细化后的角点
@@ -39,6 +42,7 @@
 - Detector 不再直接创建窗口或绘制预览。
 - 实时预览、原始视频和数据落盘由独立 `VisionPreview` 模块订阅 topic 后完成。
 - 可选算法项:
+  - `armor_detector.yolo.model_profile`
   - `armor_detector.yolo.use_roi`
   - `armor_detector.yolo.use_traditional_refine`
 - 环境变量只用于运行期诊断，不作为模块主配置接口：

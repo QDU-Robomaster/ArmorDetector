@@ -22,6 +22,9 @@ constructor_args:
       score_threshold: 0.7
       nms_threshold: 0.3
       min_confidence: 0.8
+      enable_quad_check: true
+      min_quad_area_px: 16.0
+      model_profile: detail::DetectorProfile::SP_YOLOV5
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -71,6 +74,15 @@ depends:
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
 
+#ifndef ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH
+#define ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH ARMOR_DETECTOR_MODEL_PATH
+#endif
+
+#ifndef ARMOR_DETECTOR_SHTECH_SZU0526_MODEL_PATH
+#define ARMOR_DETECTOR_SHTECH_SZU0526_MODEL_PATH \
+  ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH
+#endif
+
 template <CameraTypes::CameraInfo CameraInfoV>
 class ArmorDetector : public LibXR::Application
 {
@@ -82,6 +94,7 @@ class ArmorDetector : public LibXR::Application
   using SyncedFrame = typename Sync::SyncedFrame;
   using DetectionPacket = ArmorDetectionsFramePacket<CameraInfoV>;
   using DetectionMessage = ArmorDetectionsFrameMessage<CameraInfoV>;
+  using DetectorProfile = detail::DetectorProfile;
 
   static inline constexpr CameraInfo camera_info = CameraInfoV;
 
@@ -105,6 +118,9 @@ class ArmorDetector : public LibXR::Application
     double score_threshold{0.7};
     double nms_threshold{0.3};
     double min_confidence{0.8};
+    bool enable_quad_check{true};
+    double min_quad_area_px{16.0};
+    DetectorProfile model_profile{DetectorProfile::SP_YOLOV5};
   };
 
   struct Config
@@ -203,13 +219,17 @@ class ArmorDetector : public LibXR::Application
   static void SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self);
 
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img);
-  std::vector<CandidateArmor> DecodeOutput(double scale,
-                                           const cv::Point2f& input_offset,
-                                           const cv::Mat& output,
-                                           const cv::Mat& bgr_img);
-  std::optional<NetworkDetection> DecodeDetection(
-      double scale, const cv::Point2f& input_offset, const cv::Mat& output,
-      int row) const;
+  cv::Mat BuildNetworkInput(const cv::Mat& detector_img,
+                            detail::NetworkInputMapping& mapping) const;
+  std::vector<CandidateArmor> DecodeOutput(
+      const detail::NetworkInputMapping& mapping, const cv::Mat& output,
+      const cv::Mat& bgr_img);
+  std::optional<NetworkDetection> DecodeNetworkDetection(
+      const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
+  std::optional<NetworkDetection> DecodeSpYoloDetection(
+      const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
+  std::optional<NetworkDetection> DecodeShtechSzu0526Detection(
+      const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
   CandidateArmor BuildCandidateArmor(const NetworkDetection& detection,
                                      const cv::Mat& bgr_img) const;
   cv::Mat BuildTraditionalBinary(const cv::Mat& bgr_img,
@@ -242,7 +262,7 @@ class ArmorDetector : public LibXR::Application
   LibXR::Thread sync_frame_thread_{};
   FrameCounters counters_{};
   DiagnosticOptions diagnostics_{};
-  detail::OpenVinoYoloArmorNetwork network_{};
+  detail::OpenVinoArmorNetwork network_{};
 
   ArmorDetectionsPacket armors_packet_{};
   DetectionPacket armors_frame_packet_{};

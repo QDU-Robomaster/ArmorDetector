@@ -85,7 +85,15 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         diagnostics_.dump_refine_fails_max, ec ? 0 : 1);
   }
 
-  network_.Configure(ARMOR_DETECTOR_MODEL_PATH);
+  const char* model_path = ARMOR_DETECTOR_SP_YOLOV5_MODEL_PATH;
+  if (cfg_.yolo.model_profile == DetectorProfile::SHTECH_SZU0526)
+  {
+    model_path = ARMOR_DETECTOR_SHTECH_SZU0526_MODEL_PATH;
+  }
+
+  XR_LOG_INFO("ArmorDetector profile=%s model=%s",
+              detail::DetectorProfileName(cfg_.yolo.model_profile), model_path);
+  network_.Configure(cfg_.yolo.model_profile, model_path);
 }
 
 template <CameraTypes::CameraInfo CameraInfoV>
