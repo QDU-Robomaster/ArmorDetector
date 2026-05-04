@@ -12,7 +12,6 @@
 - 输入: `CameraFrameSync<Info>::SyncedFrame`
 - 输出: `armor_detector/armors_result`、`armor_detector/armors_frame`、`armor_detector/metrics`
 - 模型:
-  - `model/yolov5.xml` + `model/yolov5.bin`
   - `model/armor_keypoint_640x512_quantized.xml` + `model/armor_keypoint_640x512_quantized.bin`
 
 ## 对外接口
@@ -30,10 +29,9 @@
 - 不再需要独立 `NumberClassifier`
 - `PnPSolver` 现在直接吃编译期 `CameraInfo`
 - detector 解码阶段不再使用并行数组和散落的输出列号
-- `model_profile` 只切换检测器 adapter；后面的候选结构、PnP、tracker 和 Aimer 不跟着分叉
-- `YOLO_KEYPOINT_640X640` 使用 640x640 等比缩放输入和 YOLO keypoint 解码
-- `DIRECT_KEYPOINT_640X512` 是默认 profile，使用 640x512 直接缩放输入、dense-grid keypoint 解码和 topK 交叠抑制
-- `DIRECT_KEYPOINT_640X512` 默认信任模型声明角点顺序，关闭传统细化，并使用 IPPE-only PnP；传统细化和更重的 PnP 仍可显式打开做诊断
+- 当前只保留 640x512 dense-grid keypoint 模型，输入直接拉伸到模型尺寸，输出按 `[6720,21]` 解码
+- dense-grid 路径默认信任模型声明角点顺序，关闭传统细化，并使用 IPPE-only PnP；传统细化和更重的 PnP 仍可显式打开做诊断
+- 候选抑制复现 dense-grid 源语义：按 confidence 排序取前 128 个候选，丢弃与已保留候选有任意 bbox 交叠的框
 - detector 发布 `armors_frame` 时不再额外复制一份 imu/pose 缓冲
 - `ArmorDetectorResult` 保留诊断字段：
   - `raw_points / refined` 用于区分网络原始角点和传统细化后的角点
@@ -44,14 +42,13 @@
 - Detector 不再直接创建窗口或绘制预览。
 - 实时预览、原始视频和数据落盘由独立 `VisionPreview` 模块订阅 topic 后完成。
 - 可选算法项:
-  - `armor_detector.yolo.model_profile`
-  - `armor_detector.yolo.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
-  - `armor_detector.yolo.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
-  - `armor_detector.yolo.input_scale`: 默认 `255.0`，用于 OpenVINO IR 的 `/255` 输入归一化
-  - `armor_detector.yolo.direct_point_order`: `DECLARED_ORDER` 或 `CANONICAL_SORT`
-  - `armor_detector.yolo.pnp_strategy`: `IPPE_ONLY` 或 `ROBUST`
-  - `armor_detector.yolo.use_roi`
-  - `armor_detector.yolo.use_traditional_refine`
+  - `armor_detector.network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
+  - `armor_detector.network.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
+  - `armor_detector.network.input_scale`: 默认 `255.0`，用于 OpenVINO IR 的 `/255` 输入归一化
+  - `armor_detector.network.direct_point_order`: `DECLARED_ORDER` 或 `CANONICAL_SORT`
+  - `armor_detector.network.pnp_strategy`: `IPPE_ONLY` 或 `ROBUST`
+  - `armor_detector.network.use_roi`
+  - `armor_detector.network.use_traditional_refine`
   - `armor_detector.traditional.refine_mode`: `PAIR_ROI` 或 `SPLIT_ROI_WEIGHTED`
 - 部署约束:
   - 默认值使用 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU` 顺序选择设备。
@@ -67,6 +64,4 @@
   - `XR_ARMOR_DETECTOR_DIRECT_POINT_ORDER`
   - `XR_ARMOR_DETECTOR_CORNER_REFINE_MODE`
   - `XR_ARMOR_DETECTOR_PNP_STRATEGY`
-  - `XR_ARMOR_DETECTOR_CENTER_LETTERBOX`
-  - `XR_ARMOR_DETECTOR_YOLO_LETTERBOX`
   - `XR_ARMOR_DETECTOR_DUMP_REFINE_FAILS`

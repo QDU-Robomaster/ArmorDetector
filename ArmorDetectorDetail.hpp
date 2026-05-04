@@ -2,7 +2,7 @@
 
 /**
  * @file ArmorDetectorDetail.hpp
- * @brief ArmorDetector 内部使用的常量、profile 描述和轻量几何/语义工具。
+ * @brief ArmorDetector 内部使用的模型常量和轻量几何/语义工具。
  */
 
 /**
@@ -19,11 +19,6 @@ namespace armor_detector_detail
 constexpr double deg2rad = CV_PI / 180.0;
 
 /**
- * @brief 正方形 keypoint detector 默认输入边长。
- */
-constexpr int yolo_input_size = 640;
-
-/**
  * @brief dense-grid keypoint detector 输入宽度。
  */
 constexpr int direct_keypoint_input_width = 640;
@@ -34,22 +29,22 @@ constexpr int direct_keypoint_input_width = 640;
 constexpr int direct_keypoint_input_height = 512;
 
 /**
- * @brief dense-grid keypoint profile 的 NMS bbox 膨胀比例。
+ * @brief 当前唯一生产 detector 模型的稳定日志名称。
  */
-constexpr double direct_keypoint_nms_box_padding_ratio = 0.0;
+inline constexpr const char* detector_model_name = "direct_keypoint_640x512";
 
 /**
- * @brief dense-grid keypoint profile 的输出候选数量。
+ * @brief dense-grid keypoint detector 的输出候选数量。
  */
 constexpr int direct_keypoint_candidate_count = 6720;
 
 /**
- * @brief dense-grid keypoint profile 的输出列数。
+ * @brief dense-grid keypoint detector 的输出列数。
  */
 constexpr int direct_keypoint_output_width = 21;
 
 /**
- * @brief dense-grid keypoint profile 置信度排序后参与交叠抑制的最大候选数。
+ * @brief dense-grid keypoint detector 置信度排序后参与交叠抑制的最大候选数。
  */
 constexpr int direct_keypoint_keep_topk = 128;
 
@@ -73,17 +68,8 @@ constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
  */
 struct NetworkInputShape
 {
-  int width{yolo_input_size};  ///< 输入宽度，单位 px。
-  int height{yolo_input_size}; ///< 输入高度，单位 px。
-};
-
-/**
- * @brief detector 模型和 decoder profile。
- */
-enum class DetectorProfile : uint8_t
-{
-  YOLO_KEYPOINT_640X640 = 0,   ///< 640x640 等比例输入的 YOLO keypoint 输出。
-  DIRECT_KEYPOINT_640X512 = 1, ///< 640x512 拉伸输入的 dense-grid keypoint 输出。
+  int width{direct_keypoint_input_width};   ///< 输入宽度，单位 px。
+  int height{direct_keypoint_input_height}; ///< 输入高度，单位 px。
 };
 
 /**
@@ -103,57 +89,6 @@ enum class CornerRefineMode : uint8_t
   PAIR_ROI = 0,        ///< 当前实现：一个装甲板 ROI 内找灯条对。
   SPLIT_ROI_WEIGHTED = 1, ///< 源参考实现：左右灯条分 ROI 并加权选择。
 };
-
-/**
- * @brief 输入图像 resize 策略。
- */
-enum class ResizeMode : uint8_t
-{
-  PROPORTIONAL, ///< 保持比例并填充 letterbox。
-  STRETCH,      ///< 直接拉伸到模型输入尺寸。
-};
-
-/**
- * @brief detector profile 的静态规格。
- */
-struct DetectorProfileSpec
-{
-  const char* name{"yolo_keypoint_640x640"};          ///< 配置/日志使用的 profile 名称。
-  NetworkInputShape input_shape{};                    ///< 网络输入宽高。
-  ResizeMode resize_mode{ResizeMode::PROPORTIONAL};   ///< 输入 resize 策略。
-  double nms_box_padding_ratio{0.0};                  ///< NMS 前 bbox 膨胀比例。
-};
-
-/**
- * @brief 查询 detector profile 对应的静态规格。
- * @param profile detector profile。
- * @return profile 规格；未知值返回安全兜底规格。
- */
-inline DetectorProfileSpec ProfileSpecFor(DetectorProfile profile)
-{
-  switch (profile)
-  {
-    case DetectorProfile::YOLO_KEYPOINT_640X640:
-      return {};
-    case DetectorProfile::DIRECT_KEYPOINT_640X512:
-      return {"direct_keypoint_640x512",
-              {direct_keypoint_input_width, direct_keypoint_input_height},
-              ResizeMode::STRETCH,
-              direct_keypoint_nms_box_padding_ratio};
-    default:
-      return {"unknown", {}, ResizeMode::PROPORTIONAL, 0.0};
-  }
-}
-
-/**
- * @brief 查询 detector profile 的可读名称。
- * @param profile detector profile。
- * @return profile 名称字符串。
- */
-inline const char* DetectorProfileName(DetectorProfile profile)
-{
-  return ProfileSpecFor(profile).name;
-}
 
 /**
  * @brief 查询 dense-grid 角点顺序策略名称。
@@ -198,7 +133,7 @@ struct NetworkInputMapping
 {
   double x_scale{1.0};         ///< 网络 x 坐标还原到源图像的比例。
   double y_scale{1.0};         ///< 网络 y 坐标还原到源图像的比例。
-  cv::Point2f input_offset{};  ///< letterbox 填充导致的输入坐标偏移。
+  cv::Point2f input_offset{};  ///< 输入坐标偏移；当前 dense-grid 路径固定为 0。
 
   /**
    * @brief 将模型输入平面上的点还原到 detector 图像平面。
@@ -248,18 +183,6 @@ inline uint32_t scaled_log_u32(double value, double scale)
 }
 
 /**
- * @brief 网络输出行的字段布局。
- */
-struct OutputLayout
-{
-  static constexpr int objectness_index = 8; ///< 目标置信度 logit 列。
-  static constexpr int color_begin = 9;      ///< 颜色分类起始列，闭区间。
-  static constexpr int color_end = 13;       ///< 颜色分类结束列，开区间。
-  static constexpr int number_begin = 13;    ///< 编号分类起始列，闭区间。
-  static constexpr int number_end = 22;      ///< 编号分类结束列，开区间。
-};
-
-/**
  * @brief dense-grid keypoint 输出的字段布局。
  */
 struct DirectKeypointOutputLayout
@@ -273,20 +196,6 @@ struct DirectKeypointOutputLayout
   static constexpr int size_begin = 19;       ///< 尺寸分类起始列，闭区间。
   static constexpr int size_end = 21;         ///< 尺寸分类结束列，开区间。
 };
-
-/**
- * @brief 查询 profile 对应的输出列数。
- * @param profile detector profile。
- * @return 输出列数；未知 profile 返回 YOLO keypoint 列数作为兜底。
- */
-inline int OutputColumnCountFor(DetectorProfile profile)
-{
-  if (profile == DetectorProfile::DIRECT_KEYPOINT_640X512)
-  {
-    return direct_keypoint_output_width;
-  }
-  return OutputLayout::number_end;
-}
 
 /**
  * @brief dense-grid 输出行对应的网格单元。
@@ -513,29 +422,7 @@ inline ArmorColor detect_color_from_config(int detect_color)
 }
 
 /**
- * @brief 将 YOLO keypoint profile 的颜色类别 id 转为 ArmorColor。
- * @param color_id 模型颜色类别 id。
- * @return detector 统一颜色枚举。
- */
-inline ArmorColor color_from_yolo_id(int color_id)
-{
-  if (color_id == 0)
-  {
-    return ArmorColor::BLUE;
-  }
-  if (color_id == 1)
-  {
-    return ArmorColor::RED;
-  }
-  if (color_id == 2)
-  {
-    return ArmorColor::EXTINGUISH;
-  }
-  return ArmorColor::UNKNOWN;
-}
-
-/**
- * @brief 将 dense-grid keypoint profile 的颜色类别 id 转为 ArmorColor。
+ * @brief 将 dense-grid keypoint 模型的颜色类别 id 转为 ArmorColor。
  * @param color_id 模型颜色类别 id。
  * @return detector 统一颜色枚举。
  */
@@ -553,37 +440,7 @@ inline ArmorColor color_from_direct_keypoint_id(int color_id)
 }
 
 /**
- * @brief 将 YOLO keypoint profile 的编号类别 id 转为 ArmorNumber。
- * @param number_id 模型编号类别 id。
- * @return detector 统一编号枚举。
- */
-inline ArmorNumber number_from_yolo_id(int number_id)
-{
-  switch (number_id)
-  {
-    case 0:
-      return ArmorNumber::GUARD;
-    case 1:
-      return ArmorNumber::ONE;
-    case 2:
-      return ArmorNumber::TWO;
-    case 3:
-      return ArmorNumber::THREE;
-    case 4:
-      return ArmorNumber::FOUR;
-    case 5:
-      return ArmorNumber::FIVE;
-    case 6:
-      return ArmorNumber::OUTPOST;
-    case 7:
-      return ArmorNumber::BASE;
-    default:
-      return ArmorNumber::UNKNOWN;
-  }
-}
-
-/**
- * @brief 将 dense-grid keypoint profile 的 8 类编号 id 转为 ArmorNumber。
+ * @brief 将 dense-grid keypoint 模型的 8 类编号 id 转为 ArmorNumber。
  * @param class_id 模型原始 class id，范围通常为 [0, 7]。
  * @return detector 统一编号枚举。
  */
@@ -718,27 +575,6 @@ inline cv::Rect bounding_rect_from_points(
   return {static_cast<int>(min_x), static_cast<int>(min_y),
           std::max(1, static_cast<int>(max_x - min_x)),
           std::max(1, static_cast<int>(max_y - min_y))};
-}
-
-/**
- * @brief 按宽高比例向外扩展包围盒。
- * @param rect 原始包围盒。
- * @param padding_ratio 宽高方向各自的扩展比例。
- * @return 扩展后的包围盒；比例非正时返回原包围盒。
- */
-inline cv::Rect ExpandRect(const cv::Rect& rect, double padding_ratio)
-{
-  if (padding_ratio <= 0.0)
-  {
-    return rect;
-  }
-
-  const int pad_x =
-      std::max(1, static_cast<int>(std::lround(rect.width * padding_ratio)));
-  const int pad_y =
-      std::max(1, static_cast<int>(std::lround(rect.height * padding_ratio)));
-  return {rect.x - pad_x, rect.y - pad_y, rect.width + pad_x * 2,
-          rect.height + pad_y * 2};
 }
 
 }  // namespace armor_detector_detail

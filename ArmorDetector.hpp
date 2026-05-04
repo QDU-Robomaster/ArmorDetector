@@ -13,7 +13,7 @@ constructor_args:
       max_lightbar_ratio: 20.0
       min_lightbar_length: 8.0
       refine_mode: detail::CornerRefineMode::PAIR_ROI
-    yolo:
+    network:
       use_roi: false
       roi_x: 420
       roi_y: 50
@@ -21,11 +21,9 @@ constructor_args:
       roi_height: 600
       use_traditional_refine: false
       score_threshold: 0.1
-      nms_threshold: 0.0
       min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
-      model_profile: detail::DetectorProfile::DIRECT_KEYPOINT_640X512
       direct_point_order: detail::DirectKeypointPointOrder::DECLARED_ORDER
       pnp_strategy: detail::PnpSolveStrategy::IPPE_ONLY
       input_scale: 255.0
@@ -72,7 +70,6 @@ depends:
 #include <Eigen/Dense>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
-#include <opencv2/dnn.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -85,19 +82,11 @@ depends:
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
 
-#ifndef ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH
+#ifndef ARMOR_DETECTOR_MODEL_PATH
 /**
- * @brief 640x640 keypoint profile 的模型路径宏。
+ * @brief OpenVINO dense-grid keypoint 模型路径宏。
  */
-#define ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH ARMOR_DETECTOR_MODEL_PATH
-#endif
-
-#ifndef ARMOR_DETECTOR_DIRECT_KEYPOINT_MODEL_PATH
-/**
- * @brief 640x512 direct-keypoint profile 的模型路径宏。
- */
-#define ARMOR_DETECTOR_DIRECT_KEYPOINT_MODEL_PATH \
-  ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH
+#define ARMOR_DETECTOR_MODEL_PATH ""
 #endif
 
 /**
@@ -127,9 +116,6 @@ class ArmorDetector : public LibXR::Application
   using DetectionPacket = ArmorDetectionsFramePacket<CameraInfoV>;
   /// 带源帧引用的 Topic payload。
   using DetectionMessage = ArmorDetectionsFrameMessage<CameraInfoV>;
-  /// detector 模型 profile。
-  using DetectorProfile = detail::DetectorProfile;
-
   /**
    * @brief 当前模块实例绑定的编译期相机参数。
    */
@@ -150,9 +136,9 @@ class ArmorDetector : public LibXR::Application
   };
 
   /**
-   * @brief 网络 detector 和网络后处理参数。
+   * @brief 网络 detector 和后处理参数。
    */
-  struct YoloParams
+  struct NetworkParams
   {
     bool use_roi{false};                 ///< 是否只在 ROI 内运行 detector。
     int roi_x{420};                      ///< ROI 左上角 x。
@@ -161,12 +147,9 @@ class ArmorDetector : public LibXR::Application
     int roi_height{600};                 ///< ROI 高度；负值表示全图高度。
     bool use_traditional_refine{false};  ///< 是否启用传统灯条角点细化。
     double score_threshold{0.1};         ///< 网络目标置信度门限。
-    double nms_threshold{0.0};           ///< NMS IoU 门限；dense-grid profile 不使用该值。
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
-    /// 模型/decoder profile。
-    DetectorProfile model_profile{DetectorProfile::DIRECT_KEYPOINT_640X512};
     /// dense-grid 角点输出转 detector 统一顺序的策略。
     detail::DirectKeypointPointOrder direct_point_order{
         detail::DirectKeypointPointOrder::DECLARED_ORDER};
@@ -187,7 +170,7 @@ class ArmorDetector : public LibXR::Application
   {
     int detect_color{1};                 ///< 0=红色，1=蓝色，其他=不限制颜色。
     TraditionalParams traditional{};     ///< 传统灯条细化参数。
-    YoloParams yolo{};                   ///< 网络 detector 参数。
+    NetworkParams network{};             ///< 网络 detector 参数。
   };
 
   /**
@@ -308,8 +291,6 @@ class ArmorDetector : public LibXR::Application
     bool audit_every_frame{false};             ///< 是否每帧打印完整 audit 日志。
     bool audit_zero_frames{false};             ///< 是否只在零检测帧打印 audit 日志。
     bool disable_traditional_refine{false};    ///< 是否强制关闭传统角点细化。
-    bool center_letterbox{false};              ///< 是否居中放置 letterbox 输入。
-    bool yolo_letterbox{false};                ///< 是否使用 YOLO 常见 114 填充值。
     bool dump_refine_fails{false};             ///< 是否保存细化失败调试图。
     std::string dump_refine_fails_dir{};       ///< 细化失败调试文件目录。
     uint32_t dump_refine_fails_max{12};        ///< 单进程最大细化失败 dump 数。
@@ -363,35 +344,15 @@ class ArmorDetector : public LibXR::Application
       const cv::Mat& bgr_img);
 
   /**
-   * @brief 对已解码候选执行当前 profile 的交叠抑制。
+   * @brief 对已解码候选执行 dense-grid 源语义的交叠抑制。
    * @param detections 已通过 decoder 门限的候选。
-   * @return 按当前 profile 语义保留的候选下标。
+   * @return 按置信度排序并去除任意 bbox 交叠后的候选下标。
    */
   std::vector<int> SelectDetectionsAfterOverlapSuppression(
       const std::vector<NetworkDetection>& detections) const;
 
   /**
-   * @brief 按当前 profile 分派网络输出单行 decoder。
-   * @param mapping 网络输入到源图像的坐标映射。
-   * @param output 网络输出矩阵。
-   * @param row 待解码行号。
-   * @return 解码成功时返回网络检测单元。
-   */
-  std::optional<NetworkDetection> DecodeNetworkDetection(
-      const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
-
-  /**
-   * @brief 解码 YOLO keypoint profile 的一行输出。
-   * @param mapping 网络输入到源图像的坐标映射。
-   * @param output 网络输出矩阵。
-   * @param row 待解码行号。
-   * @return 通过置信度和基础几何检查时返回检测单元。
-   */
-  std::optional<NetworkDetection> DecodeYoloKeypointDetection(
-      const detail::NetworkInputMapping& mapping, const cv::Mat& output, int row) const;
-
-  /**
-   * @brief 解码 direct-keypoint profile 的一行输出。
+   * @brief 解码 dense-grid keypoint 模型的一行输出。
    * @param mapping 网络输入到源图像的坐标映射。
    * @param output 网络输出矩阵。
    * @param row 待解码行号。

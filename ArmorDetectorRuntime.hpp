@@ -32,10 +32,10 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
 }
 
 /**
- * @brief 更新配置、解析诊断环境变量并按 profile 重新加载模型。
+ * @brief 更新配置、解析诊断环境变量并重新加载模型。
  *
- * 支持的诊断环境变量包括每帧 audit、零检测帧 audit、关闭传统细化、letterbox
- * 策略切换和细化失败 dump。
+ * 支持的诊断环境变量包括每帧 audit、零检测帧 audit、关闭传统细化和细化
+ * 失败 dump。算法切换环境变量只服务一次性对比实验，生产配置应写入 Config。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param cfg 新 detector 配置。
@@ -93,19 +93,19 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   cfg_ = cfg;
   counters_ = {};
   diagnostics_ = {};
-  cfg_.yolo.input_scale =
-      parse_env_f64("XR_ARMOR_DETECTOR_INPUT_SCALE", cfg_.yolo.input_scale);
+  cfg_.network.input_scale =
+      parse_env_f64("XR_ARMOR_DETECTOR_INPUT_SCALE", cfg_.network.input_scale);
   if (const char* env = env_text("XR_ARMOR_DETECTOR_DIRECT_POINT_ORDER"))
   {
     const std::string value(env);
     if (value == "declared" || value == "declared_order")
     {
-      cfg_.yolo.direct_point_order =
+      cfg_.network.direct_point_order =
           detail::DirectKeypointPointOrder::DECLARED_ORDER;
     }
     else if (value == "sort" || value == "canonical_sort")
     {
-      cfg_.yolo.direct_point_order =
+      cfg_.network.direct_point_order =
           detail::DirectKeypointPointOrder::CANONICAL_SORT;
     }
     else
@@ -135,11 +135,11 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
     const std::string value(env);
     if (value == "ippe" || value == "ippe_only")
     {
-      cfg_.yolo.pnp_strategy = detail::PnpSolveStrategy::IPPE_ONLY;
+      cfg_.network.pnp_strategy = detail::PnpSolveStrategy::IPPE_ONLY;
     }
     else if (value == "robust")
     {
-      cfg_.yolo.pnp_strategy = detail::PnpSolveStrategy::ROBUST;
+      cfg_.network.pnp_strategy = detail::PnpSolveStrategy::ROBUST;
     }
     else
     {
@@ -153,10 +153,6 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
       parse_env_flag("ARMOR_DETECTOR_AUDIT_ZERO_FRAMES");
   diagnostics_.disable_traditional_refine =
       parse_env_flag("XR_ARMOR_DETECTOR_DISABLE_TRADITIONAL_REFINE");
-  diagnostics_.center_letterbox =
-      parse_env_flag("XR_ARMOR_DETECTOR_CENTER_LETTERBOX");
-  diagnostics_.yolo_letterbox =
-      parse_env_flag("XR_ARMOR_DETECTOR_YOLO_LETTERBOX");
   diagnostics_.dump_refine_fails =
       parse_env_flag("XR_ARMOR_DETECTOR_DUMP_REFINE_FAILS");
   if (diagnostics_.dump_refine_fails)
@@ -182,18 +178,14 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         diagnostics_.dump_refine_fails_max, ec ? 0 : 1);
   }
 
-  const char* model_path = ARMOR_DETECTOR_YOLO_KEYPOINT_MODEL_PATH;
-  if (cfg_.yolo.model_profile == DetectorProfile::DIRECT_KEYPOINT_640X512)
-  {
-    model_path = ARMOR_DETECTOR_DIRECT_KEYPOINT_MODEL_PATH;
-  }
+  const char* model_path = ARMOR_DETECTOR_MODEL_PATH;
 
-  const char* openvino_device = cfg_.yolo.openvino_device;
+  const char* openvino_device = cfg_.network.openvino_device;
   if (openvino_device == nullptr || openvino_device[0] == '\0')
   {
     openvino_device = "CPU";
   }
-  const char* openvino_performance_mode = cfg_.yolo.openvino_performance_mode;
+  const char* openvino_performance_mode = cfg_.network.openvino_performance_mode;
   if (openvino_performance_mode == nullptr ||
       openvino_performance_mode[0] == '\0')
   {
@@ -201,15 +193,15 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   }
 
   XR_LOG_INFO(
-      "ArmorDetector profile=%s device=%s mode=%s input_scale=%.6f "
+      "ArmorDetector model=%s device=%s mode=%s input_scale=%.6f "
       "point_order=%s refine_mode=%s pnp=%s model=%s",
-              detail::DetectorProfileName(cfg_.yolo.model_profile),
-      openvino_device, openvino_performance_mode, cfg_.yolo.input_scale,
-      detail::DirectKeypointPointOrderName(cfg_.yolo.direct_point_order),
+      detail::detector_model_name,
+      openvino_device, openvino_performance_mode, cfg_.network.input_scale,
+      detail::DirectKeypointPointOrderName(cfg_.network.direct_point_order),
       detail::CornerRefineModeName(cfg_.traditional.refine_mode),
-      detail::PnpSolveStrategyName(cfg_.yolo.pnp_strategy), model_path);
-  network_.Configure(cfg_.yolo.model_profile, model_path, openvino_device,
-                     openvino_performance_mode, cfg_.yolo.input_scale);
+      detail::PnpSolveStrategyName(cfg_.network.pnp_strategy), model_path);
+  network_.Configure(model_path, openvino_device, openvino_performance_mode,
+                     cfg_.network.input_scale);
 }
 
 /**

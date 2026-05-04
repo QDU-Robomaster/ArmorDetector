@@ -28,20 +28,16 @@ class OpenVinoArmorNetwork
 {
  public:
   /**
-   * @brief 加载并编译指定 detector profile 对应的 OpenVINO 模型。
-   * @param profile detector 模型 profile，用于确定输入尺寸和日志名称。
+   * @brief 加载并编译 OpenVINO dense-grid keypoint 模型。
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
    * @param input_scale 输入缩放因子；255.0 表示把 u8 输入归一化到 0..1。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
-  bool Configure(DetectorProfile profile, const char* model_path,
-                 const char* device_name, const char* performance_mode,
-                 double input_scale)
+  bool Configure(const char* model_path, const char* device_name,
+                 const char* performance_mode, double input_scale)
   {
-    profile_ = profile;
-    input_shape_ = ProfileSpecFor(profile).input_shape;
     requested_device_name_ = NormalizeDeviceName(device_name);
     available_device_names_ = QueryAvailableDeviceNames();
     device_name_ = ResolveDeviceName(requested_device_name_);
@@ -84,7 +80,7 @@ class OpenVinoArmorNetwork
       XR_LOG_PASS(
           "ArmorDetector loaded %s model on OpenVINO device %s requested %s "
           "mode %s input_scale %.6f",
-          DetectorProfileName(profile_), device_name_.c_str(),
+          detector_model_name, device_name_.c_str(),
           requested_device_name_.c_str(), performance_mode_name_.c_str(),
           input_scale_);
       return true;
@@ -93,7 +89,7 @@ class OpenVinoArmorNetwork
     {
       XR_LOG_ERROR(
           "ArmorDetector failed to load %s model on device %s mode %s: %s",
-          DetectorProfileName(profile_), device_name_.c_str(),
+          detector_model_name, device_name_.c_str(),
           performance_mode_name_.c_str(), exception.what());
       return false;
     }
@@ -104,12 +100,6 @@ class OpenVinoArmorNetwork
    * @return 模型 ready 时返回 true。
    */
   [[nodiscard]] bool Ready() const { return model_ready_; }
-
-  /**
-   * @brief 当前已配置的 detector profile。
-   * @return detector profile。
-   */
-  [[nodiscard]] DetectorProfile Profile() const { return profile_; }
 
   /**
    * @brief 当前请求的 OpenVINO 设备名。
@@ -385,7 +375,6 @@ class OpenVinoArmorNetwork
     return ov::hint::PerformanceMode::LATENCY;
   }
 
-  DetectorProfile profile_{DetectorProfile::YOLO_KEYPOINT_640X640}; ///< 当前模型 profile。
   std::vector<std::string> available_device_names_{};                ///< OpenVINO 可见设备。
   std::string requested_device_name_{"AUTO_DETECT"};                 ///< 配置请求设备。
   std::string device_name_{"CPU"};                                   ///< OpenVINO 编译设备。
