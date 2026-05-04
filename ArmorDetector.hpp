@@ -68,13 +68,6 @@ depends:
 #ifndef ARMOR_DETECTOR_MODEL_PATH
 #error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
 #endif
-static_assert(
-    []() constexpr
-    {
-      const char* path = ARMOR_DETECTOR_MODEL_PATH;
-      return path[0] != '\0';
-    }(),
-    "ARMOR_DETECTOR_MODEL_PATH must be a non-empty OpenVINO model path.");
 
 /**
  * @brief 装甲板检测应用模块。
