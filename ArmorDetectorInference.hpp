@@ -158,7 +158,7 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   const detail::DirectKeypointOutputView output_view(output);
   if (!output_view.Valid())
   {
-    XR_LOG_ERROR("ArmorDetector output shape invalid: rows=%d cols=%d type=%d",
+    XR_LOG_ERROR("ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=21x6720",
                  output.rows, output.cols, output.type());
     ++counters_.discarded_count;
     return {};

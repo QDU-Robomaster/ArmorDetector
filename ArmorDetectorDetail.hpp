@@ -186,8 +186,7 @@ inline DirectKeypointGridCell DirectKeypointGridCellForRow(int row)
 /**
  * @brief dense-grid 模型输出矩阵的轻量视图。
  *
- * 生产模型优先使用 `[21,6720]` channel-major 输出以避免图末尾 Transpose；
- * 旧模型的 `[6720,21]` row-major 输出仍可被同一 decoder 读取。
+ * 当前生产模型固定输出 `[21,6720]`，行是字段，列是候选。
  */
 class DirectKeypointOutputView
 {
@@ -199,25 +198,14 @@ class DirectKeypointOutputView
       return;
     }
 
-    if (output_.rows == direct_keypoint_candidate_count &&
-        output_.cols >= direct_keypoint_output_width)
-    {
-      row_major_ = true;
-      valid_ = true;
-      return;
-    }
-
-    if (output_.rows >= direct_keypoint_output_width &&
+    if (output_.rows == direct_keypoint_output_width &&
         output_.cols == direct_keypoint_candidate_count)
     {
-      row_major_ = false;
       valid_ = true;
     }
   }
 
   [[nodiscard]] bool Valid() const { return valid_; }
-
-  [[nodiscard]] bool RowMajor() const { return row_major_; }
 
   [[nodiscard]] int CandidateCount() const
   {
@@ -226,14 +214,12 @@ class DirectKeypointOutputView
 
   [[nodiscard]] float At(int row, int field) const
   {
-    return row_major_ ? output_.at<float>(row, field)
-                      : output_.at<float>(field, row);
+    return output_.at<float>(field, row);
   }
 
  private:
   const cv::Mat& output_;
   bool valid_{false};
-  bool row_major_{true};
 };
 
 /**
