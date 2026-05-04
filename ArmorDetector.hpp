@@ -66,16 +66,15 @@ depends:
 #include "ArmorDetectorNetwork.hpp"
 
 #ifndef ARMOR_DETECTOR_MODEL_PATH
-#define ARMOR_DETECTOR_MODEL_PATH nullptr
+#error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
 #endif
 static_assert(
     []() constexpr
     {
       const char* path = ARMOR_DETECTOR_MODEL_PATH;
-      return path != nullptr && path[0] != '\0';
+      return path[0] != '\0';
     }(),
-    "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt "
-    "as a non-empty OpenVINO model path.");
+    "ARMOR_DETECTOR_MODEL_PATH must be a non-empty OpenVINO model path.");
 
 /**
  * @brief 装甲板检测应用模块。
