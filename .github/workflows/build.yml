@@ -48,6 +48,9 @@ jobs:
           add_executable(xr_test main.cpp)
           set(XROBOT_MODULES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Modules/)
           set(WEBOTS_HOME /usr/local/webots)
+          set(LIBXR_PRINT_INTEGER_ENABLE_64BIT ON CACHE BOOL "" FORCE)
+          set(LIBXR_PRINT_FLOAT_ENABLE_DOUBLE ON CACHE BOOL "" FORCE)
+          set(LIBXR_PRINT_ENABLE_POINTER ON CACHE BOOL "" FORCE)
           add_subdirectory(libxr)
           set_property(TARGET xr PROPERTY CXX_STANDARD 20)
           set_property(TARGET xr PROPERTY CXX_STANDARD_REQUIRED ON)
@@ -144,11 +147,6 @@ jobs:
                 cfg:
                   detect_color: 1
                   network:
-                    use_roi: false
-                    roi_x: 420
-                    roi_y: 50
-                    roi_width: 600
-                    roi_height: 600
                     score_threshold: 0.1
                     min_confidence: 0.1
                     enable_quad_check: true

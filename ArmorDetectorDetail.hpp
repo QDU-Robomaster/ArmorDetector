@@ -68,60 +68,25 @@ struct NetworkInputShape
 };
 
 /**
- * @brief 网络输入坐标到原始 detector 图像坐标的映射。
+ * @brief 网络输入坐标到原始图像坐标的映射。
  */
 struct NetworkInputMapping
 {
-  double x_scale{1.0};         ///< 网络 x 坐标还原到源图像的比例。
-  double y_scale{1.0};         ///< 网络 y 坐标还原到源图像的比例。
-  cv::Point2f input_offset{};  ///< 输入坐标偏移；当前 dense-grid 路径固定为 0。
+  double x_scale{1.0}; ///< 网络 x 坐标还原到源图像的比例。
+  double y_scale{1.0}; ///< 网络 y 坐标还原到源图像的比例。
 
   /**
-   * @brief 将模型输入平面上的点还原到 detector 图像平面。
+   * @brief 将模型输入平面上的点还原到原始图像平面。
    * @param x 模型输入坐标 x。
    * @param y 模型输入坐标 y。
    * @return 源图像像素坐标。
    */
   [[nodiscard]] cv::Point2f MapToSource(float x, float y) const
   {
-    return {
-        static_cast<float>((static_cast<double>(x) - input_offset.x) * x_scale),
-        static_cast<float>((static_cast<double>(y) - input_offset.y) * y_scale)};
+    return {static_cast<float>(static_cast<double>(x) * x_scale),
+            static_cast<float>(static_cast<double>(y) * y_scale)};
   }
 };
-
-/**
- * @brief 将 64-bit 计数安全压缩成日志可打印的 32-bit 值。
- * @param value 原始值。
- * @return 截断饱和后的 uint32_t。
- */
-inline uint32_t to_log_u32(uint64_t value)
-{
-  return value > std::numeric_limits<uint32_t>::max()
-             ? std::numeric_limits<uint32_t>::max()
-             : static_cast<uint32_t>(value);
-}
-
-/**
- * @brief 缩放浮点指标并转换成日志用 uint32_t。
- * @param value 原始浮点值。
- * @param scale 缩放倍数。
- * @return 非法/非正值返回 0，溢出时饱和。
- */
-inline uint32_t scaled_log_u32(double value, double scale)
-{
-  if (!std::isfinite(value) || value <= 0.0)
-  {
-    return 0U;
-  }
-
-  const double scaled = value * scale;
-  if (scaled >= static_cast<double>(std::numeric_limits<uint32_t>::max()))
-  {
-    return std::numeric_limits<uint32_t>::max();
-  }
-  return static_cast<uint32_t>(std::lround(scaled));
-}
 
 /**
  * @brief dense-grid keypoint 输出的字段布局。

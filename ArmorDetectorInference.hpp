@@ -8,7 +8,7 @@
 /**
  * @brief 对单帧图像执行网络 detector 主流程。
  *
- * 该函数负责 ROI 裁剪、网络输入构建、OpenVINO 推理、输出解码和 ROI 坐标还原。
+ * 该函数负责网络输入构建、OpenVINO 推理和输出解码。
  * 语义过滤和尺寸类型判定在 DecodeOutput() 内完成。
  *
  * @tparam CameraInfoV 编译期相机参数。
@@ -34,39 +34,8 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
     return {};
   }
 
-  cv::Mat detector_img = raw_img;
-  cv::Point2f offset(0.0F, 0.0F);
-  cv::Rect clipped_roi(0, 0, raw_img.cols, raw_img.rows);
-
-  if (cfg_.network.use_roi)
-  {
-    int roi_width = cfg_.network.roi_width;
-    int roi_height = cfg_.network.roi_height;
-    if (roi_width < 0)
-    {
-      roi_width = raw_img.cols;
-    }
-    if (roi_height < 0)
-    {
-      roi_height = raw_img.rows;
-    }
-
-    const cv::Rect full_roi(0, 0, raw_img.cols, raw_img.rows);
-    const cv::Rect roi(cfg_.network.roi_x, cfg_.network.roi_y, roi_width, roi_height);
-    clipped_roi = roi & full_roi;
-    if (clipped_roi.empty())
-    {
-      ++counters_.discarded_count;
-      return {};
-    }
-
-    detector_img = raw_img(clipped_roi);
-    offset = cv::Point2f(static_cast<float>(clipped_roi.x),
-                         static_cast<float>(clipped_roi.y));
-  }
-
   detail::NetworkInputMapping input_mapping;
-  const cv::Mat input = BuildNetworkInput(detector_img, input_mapping);
+  const cv::Mat input = BuildNetworkInput(raw_img, input_mapping);
   if (input.empty())
   {
     ++counters_.discarded_count;
@@ -79,58 +48,36 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
     return {};
   }
 
-  auto armors = DecodeOutput(input_mapping, output, detector_img);
-  if (armors.empty())
-  {
-    return armors;
-  }
-
-  if (cfg_.network.use_roi)
-  {
-    for (auto& armor : armors)
-    {
-      for (auto& point : armor.points)
-      {
-        point += offset;
-      }
-      armor.center += offset;
-      armor.center_norm = GetNormalizedCenter(raw_img, armor.center);
-      armor.box.x += static_cast<int>(offset.x);
-      armor.box.y += static_cast<int>(offset.y);
-    }
-  }
-
-  return armors;
+  return DecodeOutput(input_mapping, output);
 }
 
 /**
- * @brief 将 detector 图像拉伸成 dense-grid 模型输入。
+ * @brief 将原始图像拉伸成 dense-grid 模型输入。
  *
- * mapping 描述 640x512 模型输入坐标如何还原到 detector_img 坐标。
+ * mapping 描述 640x512 模型输入坐标如何还原到原始图像坐标。
  *
  * @tparam CameraInfoV 编译期相机参数。
- * @param detector_img detector 处理区域图像。
+ * @param bgr_img 原始 BGR 图像。
  * @param mapping 输出的坐标还原映射。
  * @return 网络输入尺寸 BGR8 图像；输入空图时返回空 Mat。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
-    const cv::Mat& detector_img, detail::NetworkInputMapping& mapping) const
+    const cv::Mat& bgr_img, detail::NetworkInputMapping& mapping) const
 {
-  if (detector_img.empty())
+  if (bgr_img.empty())
   {
     return {};
   }
 
   const auto input_shape = network_.InputShape();
   mapping.x_scale =
-      static_cast<double>(detector_img.cols) / std::max(1, input_shape.width);
+      static_cast<double>(bgr_img.cols) / std::max(1, input_shape.width);
   mapping.y_scale =
-      static_cast<double>(detector_img.rows) / std::max(1, input_shape.height);
-  mapping.input_offset = {};
+      static_cast<double>(bgr_img.rows) / std::max(1, input_shape.height);
 
   cv::Mat input;
-  cv::resize(detector_img, input, cv::Size(input_shape.width, input_shape.height));
+  cv::resize(bgr_img, input, cv::Size(input_shape.width, input_shape.height));
   return input;
 }
 
@@ -141,16 +88,14 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
  * 尺寸类型一致性检查。
  *
  * @tparam CameraInfoV 编译期相机参数。
- * @param mapping 网络输入到 detector 图像的坐标映射。
+ * @param mapping 网络输入到原始图像的坐标映射。
  * @param output 网络输出矩阵。
- * @param bgr_img detector 源图像。
  * @return 通过所有 detector 后处理门限的候选列表。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
 ArmorDetector<CameraInfoV>::DecodeOutput(
-    const detail::NetworkInputMapping& mapping, const cv::Mat& output,
-    const cv::Mat& bgr_img)
+    const detail::NetworkInputMapping& mapping, const cv::Mat& output)
 {
   std::vector<NetworkDetection> detections;
   const ArmorColor target_color = detail::detect_color_from_config(cfg_.detect_color);
@@ -192,7 +137,7 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
 
   for (const int index : indices)
   {
-    CandidateArmor armor = BuildCandidateArmor(detections[index], bgr_img);
+    CandidateArmor armor = BuildCandidateArmor(detections[index]);
 
     const bool color_mismatch =
         (target_color != ArmorColor::UNKNOWN) && (armor.color != target_color);
@@ -368,17 +313,16 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
 /**
  * @brief 从网络检测单元创建内部候选。
  *
- * 候选会立即计算中心、归一化中心和尺寸比例等几何派生量。
+ * 候选会立即计算中心和尺寸比例等几何派生量。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param detection 网络检测单元。
- * @param bgr_img detector 源图像。
  * @return 初始化完成的内部候选。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 typename ArmorDetector<CameraInfoV>::CandidateArmor
 ArmorDetector<CameraInfoV>::BuildCandidateArmor(
-    const NetworkDetection& detection, const cv::Mat& bgr_img) const
+    const NetworkDetection& detection) const
 {
   CandidateArmor armor;
   armor.color = detection.color;
@@ -387,7 +331,6 @@ ArmorDetector<CameraInfoV>::BuildCandidateArmor(
   armor.box = detection.box;
   armor.points = detection.points;
   armor.center = detail::quad_center(armor.points);
-  armor.center_norm = GetNormalizedCenter(bgr_img, armor.center);
   UpdateGeometryMetrics(armor);
   return armor;
 }

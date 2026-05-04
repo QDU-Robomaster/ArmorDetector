@@ -40,7 +40,6 @@
 - 实时预览、原始视频和数据落盘由独立 `VisionPreview` 模块订阅 topic 后完成。
 - 算法配置只保留生产路径必需项:
   - `detect_color`: `0` 红色、`1` 蓝色、其他值不限制颜色
-  - `network.use_roi / roi_x / roi_y / roi_width / roi_height`: 可选 ROI 裁剪
   - `network.score_threshold`: 网络候选置信度门限
   - `network.min_confidence`: 语义过滤后的最终置信度门限
   - `network.enable_quad_check / min_quad_area_px`: 四边形合法性过滤

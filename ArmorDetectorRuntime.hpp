@@ -129,28 +129,20 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   armors_topic_.Publish(armors_msg);
   metrics_topic_.Publish(metrics_msg_);
 
-  const uint32_t log_frame = detail::to_log_u32(metrics_msg_.frame_index);
-  const uint32_t log_max_objectness_x1000 =
-      detail::scaled_log_u32(metrics_msg_.max_objectness, 1000.0);
-  const uint32_t log_detector_ms_x100 =
-      detail::scaled_log_u32(metrics_msg_.detector_latency_ms, 100.0);
-  const uint32_t log_publish_ms_x100 =
-      detail::scaled_log_u32(metrics_msg_.publish_latency_ms, 100.0);
-
   if ((frame_index_ % detail::metrics_log_period) == 0U)
   {
     XR_LOG_INFO(
-        "ArmorDetector frame=%u armors=%u decoded=%u overlap_kept=%u semantic_kept=%u pnp=%u",
-        log_frame,
+        "ArmorDetector frame=%llu armors=%u decoded=%u overlap_kept=%u semantic_kept=%u pnp=%u",
+        static_cast<unsigned long long>(metrics_msg_.frame_index),
         metrics_msg_.armor_count, metrics_msg_.decoded_count,
         metrics_msg_.overlap_kept_count, metrics_msg_.semantic_kept_count,
         metrics_msg_.pnp_success_count);
     XR_LOG_INFO(
-        "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj_x1000=%u detector_ms_x100=%u publish_ms_x100=%u",
+        "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f detector_ms=%.3f publish_ms=%.3f",
         metrics_msg_.semantic_discard_count,
         metrics_msg_.type_discard_count, metrics_msg_.discarded_count,
-        log_max_objectness_x1000,
-        log_detector_ms_x100, log_publish_ms_x100);
+        metrics_msg_.max_objectness,
+        metrics_msg_.detector_latency_ms, metrics_msg_.publish_latency_ms);
   }
 }
 

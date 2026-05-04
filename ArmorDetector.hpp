@@ -7,11 +7,6 @@ constructor_args:
   cfg:
     detect_color: 1
     network:
-      use_roi: false
-      roi_x: 420
-      roi_y: 50
-      roi_width: 600
-      roi_height: 600
       score_threshold: 0.1
       min_confidence: 0.1
       enable_quad_check: true
@@ -45,7 +40,6 @@ depends:
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,7 +47,6 @@ depends:
 #include <Eigen/Dense>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include "CameraFrameSync.hpp"
@@ -106,11 +99,6 @@ class ArmorDetector : public LibXR::Application
    */
   struct NetworkParams
   {
-    bool use_roi{false};                 ///< 是否只在 ROI 内运行 detector。
-    int roi_x{420};                      ///< ROI 左上角 x。
-    int roi_y{50};                       ///< ROI 左上角 y。
-    int roi_width{600};                  ///< ROI 宽度；负值表示全图宽度。
-    int roi_height{600};                 ///< ROI 高度；负值表示全图高度。
     double score_threshold{0.1};         ///< 网络目标置信度门限。
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
@@ -167,7 +155,6 @@ class ArmorDetector : public LibXR::Application
     cv::Rect box{};                            ///< 当前候选包围盒。
     std::array<cv::Point2f, 4> points{};       ///< 当前角点，顺序为左上、右上、右下、左下。
     cv::Point2f center{};                      ///< 候选像素中心。
-    cv::Point2f center_norm{};                 ///< 宽高归一化中心。
     double ratio{0.0};                         ///< 左右灯条中心距与灯条长度的比例。
   };
 
@@ -238,23 +225,21 @@ class ArmorDetector : public LibXR::Application
 
   /**
    * @brief 构建网络输入图像并记录输入坐标到源图像坐标的映射。
-   * @param detector_img detector 处理区域图像。
+   * @param bgr_img 原始 BGR 图像。
    * @param mapping 输出坐标映射。
    * @return 网络输入尺寸的 BGR8 图像。
    */
-  cv::Mat BuildNetworkInput(const cv::Mat& detector_img,
+  cv::Mat BuildNetworkInput(const cv::Mat& bgr_img,
                             detail::NetworkInputMapping& mapping) const;
 
   /**
    * @brief 解码网络输出并执行交叠抑制、语义过滤和类型判定。
    * @param mapping 网络输入到源图像的坐标映射。
    * @param output 网络输出矩阵。
-   * @param bgr_img detector 源图像。
    * @return 有效装甲板候选。
    */
   std::vector<CandidateArmor> DecodeOutput(
-      const detail::NetworkInputMapping& mapping, const cv::Mat& output,
-      const cv::Mat& bgr_img);
+      const detail::NetworkInputMapping& mapping, const cv::Mat& output);
 
   /**
    * @brief 对已解码候选执行 dense-grid 源语义的交叠抑制。
@@ -278,11 +263,9 @@ class ArmorDetector : public LibXR::Application
   /**
    * @brief 将网络检测单元转换为内部候选并计算基础几何指标。
    * @param detection 网络检测单元。
-   * @param bgr_img detector 源图像。
    * @return 内部装甲板候选。
    */
-  CandidateArmor BuildCandidateArmor(const NetworkDetection& detection,
-                                     const cv::Mat& bgr_img) const;
+  CandidateArmor BuildCandidateArmor(const NetworkDetection& detection) const;
 
   /**
    * @brief 检查候选编号先验与尺寸类型是否冲突。
