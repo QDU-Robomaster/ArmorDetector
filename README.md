@@ -11,7 +11,7 @@
 - 输入: `CameraFrameSync<Info>::SyncedFrame`
 - 输出: `armor_detector/armors_result`、`armor_detector/armors_frame`、`armor_detector/metrics`
 - 模型:
-  - `model/armor_keypoint_640x512_quantized.xml` + `model/armor_keypoint_640x512_quantized.bin`
+  - `model/armor_keypoint_640x512_bgr.xml` + `model/armor_keypoint_640x512_bgr.bin`
 
 ## 对外接口
 

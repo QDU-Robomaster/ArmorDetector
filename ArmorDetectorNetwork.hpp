@@ -62,7 +62,6 @@ class OpenVinoArmorNetwork
       input.model().set_layout("NCHW");
       auto& preprocess = input.preprocess();
       preprocess.convert_element_type(ov::element::f32);
-      preprocess.convert_color(ov::preprocess::ColorFormat::RGB);
       preprocess.scale(255.0);
 
       model = post_processor.build();
