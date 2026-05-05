@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: 基于 OpenVINO 的装甲板检测和 PnP 位姿估计
+module_description: 装甲板检测和 PnP 位姿估计
 constructor_args:
   cfg:
     detect_color: 1
@@ -56,16 +56,33 @@ depends:
 #include "logger.hpp"
 #include "ArmorDetectorPnPSolver.hpp"
 #include "ArmorDetectorDetail.hpp"
+#if defined(ARMOR_DETECTOR_USE_ORT_CUDA)
+#include "ArmorDetectorOnnxRuntimeNetwork.hpp"
+#else
 #include "ArmorDetectorNetwork.hpp"
+#endif
 
 #ifndef ARMOR_DETECTOR_MODEL_PATH
 #error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
 #endif
 
+#ifndef ARMOR_DETECTOR_BACKEND_NAME
+#define ARMOR_DETECTOR_BACKEND_NAME "UNKNOWN"
+#endif
+
+namespace armor_detector_detail
+{
+#if defined(ARMOR_DETECTOR_USE_ORT_CUDA)
+using SelectedArmorNetwork = OnnxRuntimeArmorNetwork;
+#else
+using SelectedArmorNetwork = OpenVinoArmorNetwork;
+#endif
+}  // namespace armor_detector_detail
+
 /**
  * @brief 装甲板检测应用模块。
  *
- * ArmorDetector 从 CameraFrameSync 读取已经对齐的图像/IMU 帧，执行 dense-grid
+ * ArmorDetector 从 CameraFrameSync 读取已经对齐的图像/IMU 帧，执行网络
  * keypoint 检测、语义过滤、尺寸类型判断和 PnP 位姿求解，最后向 `armor_detector`
  * domain 发布检测结果、带原始帧引用的结果和运行指标。
  *
@@ -103,9 +120,9 @@ class ArmorDetector : public LibXR::Application
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
-    /// OpenVINO 编译设备；"AUTO_DETECT" 按 NPU、GPU、CPU 顺序自动选择。
+    /// OpenVINO 后端编译设备；ONNX Runtime CUDA 后端忽略该字段。
     const char* openvino_device{"AUTO_DETECT"};
-    /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
+    /// OpenVINO 后端性能模式；ONNX Runtime CUDA 后端忽略该字段。
     const char* openvino_performance_mode{"LATENCY"};
   };
 
@@ -312,7 +329,7 @@ class ArmorDetector : public LibXR::Application
   uint64_t frame_index_{0};              ///< 已处理帧计数。
   LibXR::Thread sync_frame_thread_{};    ///< 后台同步帧消费线程。
   FrameCounters counters_{};             ///< 当前帧内部计数器。
-  detail::OpenVinoArmorNetwork network_{}; ///< OpenVINO 网络封装。
+  detail::SelectedArmorNetwork network_{}; ///< 编译期选择的网络封装。
 
   ArmorDetectionsPacket armors_packet_{}; ///< 复用的检测结果包。
   DetectionPacket armors_frame_packet_{}; ///< 复用的带源帧引用结果包。

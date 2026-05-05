@@ -1,12 +1,12 @@
 # ArmorDetector
 
-`ArmorDetector` 从 `CameraFrameSync` 获取同步后的图像帧，调用 OpenVINO
-检测装甲板，并使用相机内参计算每个装甲板在相机坐标系下的位姿。
+`ArmorDetector` 从 `CameraFrameSync` 获取同步后的图像帧，调用编译期选定的
+推理后端检测装甲板，并使用相机内参计算每个装甲板在相机坐标系下的位姿。
 
 ## 数据流
 
 1. 读取 `CameraFrameSync<Info>::SyncedFrame`
-2. 将图像缩放到模型输入尺寸并执行 OpenVINO 推理
+2. 将图像缩放到模型输入尺寸并执行网络推理
 3. 解码候选装甲板，过滤低置信度或几何异常的结果
 4. 对有效结果执行 PnP
 5. 发布检测结果、原始帧引用和运行指标
@@ -29,7 +29,12 @@
 - `model/armor_keypoint_640x512_bgr.bin`
 - `model/armor_keypoint_640x512_bgr.onnx`
 
-OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使用 `.onnx` 文件。
+构建时默认使用 `ARMOR_DETECTOR_BACKEND=AUTO`。检测到可用 ONNX Runtime CUDA
+环境时使用 `.onnx` 文件，否则回退 OpenVINO `.xml/.bin` 文件。也可以显式设置为
+`ORT_CUDA` 或 `OPENVINO`。
+
+ONNX Runtime CUDA 查找路径可通过 `ONNXRUNTIME_ROOT`、`ONNXRUNTIME_DIR` 或
+`ORT_ROOT` 指定。
 
 ## 结果内容
 
@@ -50,11 +55,11 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 - `network.min_confidence`: 最终结果置信度门限
 - `network.enable_quad_check`: 是否启用四边形面积检查
 - `network.min_quad_area_px`: 四边形最小面积，单位为像素平方
-- `network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
-- `network.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
+- `network.openvino_device`: OpenVINO 后端使用，支持 `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
+- `network.openvino_performance_mode`: OpenVINO 后端使用，支持 `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
 
-默认设备策略为 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU` 顺序选择可用设备。
-CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
+OpenVINO 后端默认设备策略为 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU`
+顺序选择可用设备。CI 可使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 
 ## 边界
 

@@ -57,10 +57,9 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
     openvino_performance_mode = "LATENCY";
   }
 
-  XR_LOG_INFO(
-      "ArmorDetector model=%s device=%s mode=%s path=%s",
-      detail::detector_model_name, openvino_device, openvino_performance_mode,
-      model_path);
+  XR_LOG_INFO("ArmorDetector model=%s backend=%s path=%s",
+              detail::detector_model_name, ARMOR_DETECTOR_BACKEND_NAME,
+              model_path);
   network_.Configure(model_path, openvino_device, openvino_performance_mode);
 }
 
