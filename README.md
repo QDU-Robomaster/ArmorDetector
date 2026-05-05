@@ -27,6 +27,9 @@
 
 - `model/armor_keypoint_640x512_bgr.xml`
 - `model/armor_keypoint_640x512_bgr.bin`
+- `model/armor_keypoint_640x512_bgr.onnx`
+
+OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使用 `.onnx` 文件。
 
 ## 结果内容
 
