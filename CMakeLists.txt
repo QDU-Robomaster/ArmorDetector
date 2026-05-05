@@ -12,9 +12,22 @@ set(ARMOR_DETECTOR_BACKEND "AUTO" CACHE STRING
   "ArmorDetector inference backend: AUTO, ORT_CUDA, or OPENVINO")
 set_property(CACHE ARMOR_DETECTOR_BACKEND PROPERTY STRINGS
   AUTO ORT_CUDA OPENVINO)
+set(ARMOR_DETECTOR_TARGET_PROCESSOR "" CACHE STRING
+  "Override target processor for backend selection; empty uses CMAKE_SYSTEM_PROCESSOR")
 
 remove_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 target_compile_definitions(xr PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
+
+if(ARMOR_DETECTOR_TARGET_PROCESSOR)
+  set(_ARMOR_DETECTOR_PROCESSOR "${ARMOR_DETECTOR_TARGET_PROCESSOR}")
+else()
+  set(_ARMOR_DETECTOR_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+string(TOLOWER "${_ARMOR_DETECTOR_PROCESSOR}" _ARMOR_DETECTOR_PROCESSOR_LOWER)
+set(ARMOR_DETECTOR_OPENVINO_ALLOWED TRUE)
+if(_ARMOR_DETECTOR_PROCESSOR_LOWER MATCHES "^(aarch64|arm64)$")
+  set(ARMOR_DETECTOR_OPENVINO_ALLOWED FALSE)
+endif()
 
 set(_ORT_HINTS
   "$ENV{ONNXRUNTIME_ROOT}"
@@ -57,6 +70,12 @@ set(ARMOR_DETECTOR_SELECTED_BACKEND "")
 if(ARMOR_DETECTOR_BACKEND STREQUAL "AUTO")
   if(ARMOR_DETECTOR_ORT_CUDA_FOUND)
     set(ARMOR_DETECTOR_SELECTED_BACKEND "ORT_CUDA")
+  elseif(NOT ARMOR_DETECTOR_OPENVINO_ALLOWED)
+    message(FATAL_ERROR
+      "ArmorDetector AUTO cannot fall back to OpenVINO on ARM64: the current "
+      "model contains opset11 Interpolate layers that are not supported by the "
+      "OpenVINO ARM CPU plugin. Install ONNX Runtime CUDA and set "
+      "ONNXRUNTIME_ROOT, or build on a supported OpenVINO target.")
   else()
     find_package(OpenVINO QUIET COMPONENTS Runtime)
     if(TARGET openvino::runtime)
@@ -72,6 +91,12 @@ elseif(ARMOR_DETECTOR_BACKEND STREQUAL "ORT_CUDA")
   endif()
   set(ARMOR_DETECTOR_SELECTED_BACKEND "ORT_CUDA")
 elseif(ARMOR_DETECTOR_BACKEND STREQUAL "OPENVINO")
+  if(NOT ARMOR_DETECTOR_OPENVINO_ALLOWED)
+    message(FATAL_ERROR
+      "ARMOR_DETECTOR_BACKEND=OPENVINO is disabled on ARM64 for this model: "
+      "opset11 Interpolate layers are not supported by the OpenVINO ARM CPU "
+      "plugin. Use ARMOR_DETECTOR_BACKEND=ORT_CUDA with ONNX Runtime CUDA.")
+  endif()
   find_package(OpenVINO REQUIRED COMPONENTS Runtime)
   set(ARMOR_DETECTOR_SELECTED_BACKEND "OPENVINO")
 else()

@@ -36,6 +36,10 @@
 ONNX Runtime CUDA 查找路径可通过 `ONNXRUNTIME_ROOT`、`ONNXRUNTIME_DIR` 或
 `ORT_ROOT` 指定。
 
+在 ARM64 目标上，`AUTO` 不会回退 OpenVINO；必须提供 ONNX Runtime CUDA。
+当前模型含有 OpenVINO ARM CPU 插件不支持的插值算子，错误后端会在 CMake
+阶段直接失败。
+
 ## 结果内容
 
 每个装甲板结果包含:
