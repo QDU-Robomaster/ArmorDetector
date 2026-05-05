@@ -51,10 +51,10 @@ depends:
 
 #include "CameraFrameSync.hpp"
 #include "app_framework.hpp"
-#include "armor.hpp"
+#include "ArmorDetectorTypes.hpp"
 #include "libxr.hpp"
 #include "logger.hpp"
-#include "pnp_solver.hpp"
+#include "ArmorDetectorPnPSolver.hpp"
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
 
@@ -307,7 +307,7 @@ class ArmorDetector : public LibXR::Application
  private:
   Config cfg_{};                         ///< 当前 detector 配置。
   Sync& sync_;                           ///< 同步帧来源引用。
-  PnPSolver<CameraInfoV> pnp_solver_{};  ///< 装甲板 PnP 求解器。
+  ArmorDetectorPnPSolver<CameraInfoV> pnp_solver_{};  ///< 装甲板 PnP 求解器。
   uint64_t latest_timestamp_us_{0};      ///< 最近处理图像的传感器时间戳，单位 us。
   uint64_t frame_index_{0};              ///< 已处理帧计数。
   LibXR::Thread sync_frame_thread_{};    ///< 后台同步帧消费线程。

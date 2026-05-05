@@ -26,7 +26,7 @@
 ## 内部约束
 
 - 不再需要独立 `NumberClassifier`
-- `PnPSolver` 现在直接吃编译期 `CameraInfo`
+- `ArmorDetectorPnPSolver` 现在直接吃编译期 `CameraInfo`
 - detector 解码阶段不再使用并行数组和散落的输出列号
 - 当前只保留 640x512 dense-grid keypoint 模型，输入直接拉伸到模型尺寸，输出按 `[21,6720]` 解码
 - dense-grid 路径固定按模型声明角点顺序转换为左上、右上、右下、左下，并使用 IPPE PnP

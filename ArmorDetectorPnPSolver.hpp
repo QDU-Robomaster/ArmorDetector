@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * @file pnp_solver.hpp
+ * @file ArmorDetectorPnPSolver.hpp
  * @brief 基于编译期相机标定参数的装甲板 PnP 求解器。
  */
 
@@ -15,7 +15,7 @@
 #include <opencv2/core.hpp>
 
 #include "CameraBase.hpp"
-#include "armor.hpp"
+#include "ArmorDetectorTypes.hpp"
 
 /**
  * @brief 将装甲板四个图像角点求解为相机坐标系位姿。
@@ -26,7 +26,7 @@
  * @tparam CameraInfoV 编译期相机参数。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-class PnPSolver
+class ArmorDetectorPnPSolver
 {
  public:
   using CameraInfo = CameraTypes::CameraInfo; ///< 相机参数类型别名。
@@ -45,7 +45,7 @@ class PnPSolver
   /**
    * @brief 构造 PnP 求解器并缓存相机矩阵、畸变系数和装甲板物理角点。
    */
-  PnPSolver();
+  ArmorDetectorPnPSolver();
 
   /**
    * @brief 求解单个装甲板在相机坐标系下的位姿。
@@ -137,7 +137,7 @@ class PnPSolver
  * @brief 构造并缓存 PnP 求解所需的固定矩阵和物理模型。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-PnPSolver<CameraInfoV>::PnPSolver()
+ArmorDetectorPnPSolver<CameraInfoV>::ArmorDetectorPnPSolver()
     : camera_matrix_(BuildCameraMatrix()),
       dist_coeffs_(BuildDistCoeffs()),
       small_armor_points_(
@@ -151,7 +151,7 @@ PnPSolver<CameraInfoV>::PnPSolver()
  * @brief 从编译期 CameraInfoV 复制相机矩阵到 OpenCV Mat。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-cv::Mat PnPSolver<CameraInfoV>::BuildCameraMatrix()
+cv::Mat ArmorDetectorPnPSolver<CameraInfoV>::BuildCameraMatrix()
 {
   return cv::Mat(3, 3, CV_64F,
                  const_cast<double*>(camera_info.camera_matrix.data()))
@@ -162,18 +162,18 @@ cv::Mat PnPSolver<CameraInfoV>::BuildCameraMatrix()
  * @brief 根据畸变模型生成 OpenCV PnP 可用的畸变系数。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-cv::Mat PnPSolver<CameraInfoV>::BuildDistCoeffs()
+cv::Mat ArmorDetectorPnPSolver<CameraInfoV>::BuildDistCoeffs()
 {
   if constexpr (pnp_dist_coeffs_info.uses_rational_polynomial_extension)
   {
     XR_LOG_WARN(
-        "PnPSolver: 当前使用 8 项 rational 畸变系数；后端支持后再扩展到 14 项。");
+        "ArmorDetectorPnPSolver: 当前使用 8 项 rational 畸变系数；后端支持后再扩展到 14 项。");
   }
 
   if constexpr (pnp_dist_coeffs_info.requires_undistort_first)
   {
     XR_LOG_WARN(
-        "PnPSolver: 当前畸变模型不直接支持 (%d)，应先去畸变到 pinhole "
+        "ArmorDetectorPnPSolver: 当前畸变模型不直接支持 (%d)，应先去畸变到 pinhole "
         "再按 NONE 模型求解 PnP。",
         int(camera_info.distortion_model));
     return {};
@@ -193,7 +193,7 @@ cv::Mat PnPSolver<CameraInfoV>::BuildDistCoeffs()
  * @brief 生成中心在原点的装甲板四角物理坐标。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_mm,
+std::vector<cv::Point3f> ArmorDetectorPnPSolver<CameraInfoV>::BuildArmorPoints(double width_mm,
                                                                   double height_mm)
 {
   const double half_width_m = width_mm * 0.5 / 1000.0;
@@ -210,7 +210,7 @@ std::vector<cv::Point3f> PnPSolver<CameraInfoV>::BuildArmorPoints(double width_m
  * @brief 使用 IPPE 求解装甲板平面位姿。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-bool PnPSolver<CameraInfoV>::SolvePnP(
+bool ArmorDetectorPnPSolver<CameraInfoV>::SolvePnP(
     const std::array<cv::Point2f, 4>& image_armor_points, ArmorType armor_type,
     cv::Mat& rvec, cv::Mat& tvec, double* reprojection_error_px) const
 {
@@ -268,7 +268,7 @@ bool PnPSolver<CameraInfoV>::SolvePnP(
  * @brief 计算图像点到相机主点的像素距离。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-double PnPSolver<CameraInfoV>::CalculateDistanceToCenter(
+double ArmorDetectorPnPSolver<CameraInfoV>::CalculateDistanceToCenter(
     const cv::Point2f& image_point) const
 {
   const float cx = static_cast<float>(camera_matrix_.at<double>(0, 2));
@@ -280,7 +280,7 @@ double PnPSolver<CameraInfoV>::CalculateDistanceToCenter(
  * @brief 对候选位姿执行 projectPoints 并返回平均像素误差。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-double PnPSolver<CameraInfoV>::ComputeReprojectionError(
+double ArmorDetectorPnPSolver<CameraInfoV>::ComputeReprojectionError(
     const std::vector<cv::Point3f>& object_points,
     const std::vector<cv::Point2f>& image_points, const cv::Mat& camera_matrix,
     const cv::Mat& dist_coeffs, const cv::Mat& rvec, const cv::Mat& tvec)

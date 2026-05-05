@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * @file armor.hpp
+ * @file ArmorDetectorTypes.hpp
  * @brief ArmorDetector 对外发布的数据结构、枚举和 Topic payload 类型。
  */
 

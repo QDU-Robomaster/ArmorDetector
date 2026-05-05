@@ -8,7 +8,7 @@
 /**
  * @brief ArmorDetector 内部实现命名空间。
  *
- * 这些工具不构成跨模块 ABI；对外请使用 armor.hpp 中的结果结构。
+ * 这些工具不构成跨模块 ABI；对外请使用 ArmorDetectorTypes.hpp 中的结果结构。
  */
 namespace armor_detector_detail
 {
