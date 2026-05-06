@@ -26,6 +26,31 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
 {
   SetConfig(cfg);
 
+  if (cfg_.referee_auto_detect_color)
+  {
+    const char* domain_name = cfg_.referee_domain;
+    if (domain_name == nullptr || domain_name[0] == '\0')
+    {
+      domain_name = "host";
+    }
+    const char* topic_name = cfg_.referee_topic;
+    if (topic_name == nullptr || topic_name[0] == '\0')
+    {
+      topic_name = "robot_game_ref";
+    }
+
+    referee_domain_ = LibXR::Topic::Domain(domain_name);
+    referee_topic_ =
+        LibXR::Topic(LibXR::Topic::WaitTopic(topic_name, UINT32_MAX, &referee_domain_));
+    referee_callback_ = LibXR::Topic::Callback::Create(
+        [](bool, ArmorDetector* self, LibXR::RawData& data)
+        {
+          self->OnRefereeRobotGame(data);
+        },
+        this);
+    referee_topic_.RegisterCallback(referee_callback_);
+  }
+
   sync_frame_thread_.Create(this, SyncFrameThreadFun, "ArmorDetSync",
                             detail::sync_frame_thread_stack_size,
                             LibXR::Thread::Priority::HIGH);
@@ -64,6 +89,80 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
       detail::detector_model_name, openvino_device, openvino_performance_mode,
       model_path);
   network_.Configure(model_path, openvino_device, openvino_performance_mode);
+}
+
+/**
+ * @brief 裁判系统摘要包回调。
+ *
+ * 当前只依赖 RobotGameRefereePack 第一个字段 RobotStatus 的首字节 robot_id。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param data 裁判系统摘要包原始 payload。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+void ArmorDetector<CameraInfoV>::OnRefereeRobotGame(const LibXR::RawData& data)
+{
+  if (data.addr_ == nullptr || data.size_ < sizeof(uint8_t))
+  {
+    return;
+  }
+
+  const auto robot_id = *reinterpret_cast<const uint8_t*>(data.addr_);
+  const int target_color = TargetColorFromRobotId(robot_id);
+  if (target_color < 0)
+  {
+    return;
+  }
+
+  referee_target_color_.store(target_color, std::memory_order_relaxed);
+}
+
+/**
+ * @brief 当前有效目标颜色。
+ *
+ * 自动颜色启用且已收到有效裁判系统 robot_id 时使用动态敌方颜色，否则使用
+ * cfg.detect_color。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @return 当前用于语义过滤的目标颜色。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+ArmorColor ArmorDetector<CameraInfoV>::CurrentTargetColor() const
+{
+  if (cfg_.referee_auto_detect_color)
+  {
+    const int target_color = referee_target_color_.load(std::memory_order_relaxed);
+    if (target_color == 0 || target_color == 1)
+    {
+      return detail::detect_color_from_config(target_color);
+    }
+  }
+
+  return detail::detect_color_from_config(cfg_.detect_color);
+}
+
+/**
+ * @brief 由机器人 ID 推导敌方颜色。
+ *
+ * RoboMaster ID 1~99 视为红方，本机红方时目标为蓝色；ID 101~199 视为蓝方，
+ * 本机蓝方时目标为红色。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param robot_id 本机机器人 ID。
+ * @return 0=红，1=蓝，-1=不确定。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+int ArmorDetector<CameraInfoV>::TargetColorFromRobotId(uint8_t robot_id)
+{
+  if (robot_id >= 1U && robot_id < 100U)
+  {
+    return 1;
+  }
+  if (robot_id >= 101U && robot_id < 200U)
+  {
+    return 0;
+  }
+  return -1;
 }
 
 /**

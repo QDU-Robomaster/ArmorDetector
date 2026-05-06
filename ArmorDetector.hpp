@@ -13,6 +13,9 @@ constructor_args:
       min_quad_area_px: 16.0
       openvino_device: "AUTO_DETECT"
       openvino_performance_mode: "LATENCY"
+    referee_auto_detect_color: false
+    referee_domain: "host"
+    referee_topic: "robot_game_ref"
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -38,8 +41,10 @@ depends:
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -116,6 +121,9 @@ class ArmorDetector : public LibXR::Application
   {
     int detect_color{1};                 ///< 0=红色，1=蓝色，其他=不限制颜色。
     NetworkParams network{};             ///< 网络 detector 参数。
+    bool referee_auto_detect_color{false}; ///< 是否根据裁判系统动态切换敌方颜色。
+    const char* referee_domain{"host"};  ///< 裁判系统所在主题域。
+    const char* referee_topic{"robot_game_ref"}; ///< 裁判系统摘要包主题名。
   };
 
   /**
@@ -297,6 +305,27 @@ class ArmorDetector : public LibXR::Application
                                   const cv::Point2f& center) const;
 
   /**
+   * @brief 裁判系统回调入口。
+   *
+   * 只读取 RobotGameReferee 包前缀中的 robot_id 字节，根据阵营写入动态目标颜色标志。
+   * @param data 裁判系统摘要包原始数据。
+   */
+  void OnRefereeRobotGame(const LibXR::RawData& data);
+
+  /**
+   * @brief 根据当前配置和动态裁判系统标志计算目标颜色。
+   * @return 目标颜色；UNKNOWN 表示不按颜色过滤。
+   */
+  ArmorColor CurrentTargetColor() const;
+
+  /**
+   * @brief 由机器人 ID 推导敌方颜色标志。
+   * @param robot_id 本机机器人 ID。
+   * @return 0=红，1=蓝，-1=不确定。
+   */
+  static int TargetColorFromRobotId(uint8_t robot_id);
+
+  /**
    * @brief 将内部候选转换成 Topic 结果包并执行 PnP。
    * @param armors 内部候选列表。
    * @param bgr_img 源图像。
@@ -317,6 +346,7 @@ class ArmorDetector : public LibXR::Application
   ArmorDetectionsPacket armors_packet_{}; ///< 复用的检测结果包。
   DetectionPacket armors_frame_packet_{}; ///< 复用的带源帧引用结果包。
   ArmorDetectorMetrics metrics_msg_{};    ///< 复用的 metrics 消息。
+  std::atomic<int> referee_target_color_{-1}; ///< 动态裁判系统目标颜色，-1 表示未设置。
 
   /**
    * @brief detector Topic domain。
@@ -340,6 +370,21 @@ class ArmorDetector : public LibXR::Application
    */
   LibXR::Topic metrics_topic_ =
       LibXR::Topic("metrics", sizeof(ArmorDetectorMetrics), &armor_domain_);
+
+  /**
+   * @brief 裁判系统主题域。
+   */
+  LibXR::Topic::Domain referee_domain_ = LibXR::Topic::Domain("host");
+
+  /**
+   * @brief 裁判系统摘要包主题。
+   */
+  LibXR::Topic referee_topic_ = LibXR::Topic();
+
+  /**
+   * @brief 裁判系统回调句柄。
+   */
+  LibXR::Topic::Callback referee_callback_ = LibXR::Topic::Callback();
 };
 
 #include "ArmorDetectorPipeline.hpp"

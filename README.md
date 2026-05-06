@@ -46,6 +46,10 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 ## 配置
 
 - `detect_color`: `0` 只保留红色，`1` 只保留蓝色，其他值不过滤颜色
+- `referee_auto_detect_color`: 开启后订阅裁判系统摘要包，按本机 `robot_id`
+  动态切换敌方颜色；未收到有效 ID 时仍使用 `detect_color`
+- `referee_domain`: 裁判系统摘要包所在 topic domain，默认 `host`
+- `referee_topic`: 裁判系统摘要包 topic 名，默认 `robot_game_ref`
 - `network.score_threshold`: 网络候选置信度门限
 - `network.min_confidence`: 最终结果置信度门限
 - `network.enable_quad_check`: 是否启用四边形面积检查

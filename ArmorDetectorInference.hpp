@@ -98,7 +98,7 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
     const detail::NetworkInputMapping& mapping, const cv::Mat& output)
 {
   std::vector<NetworkDetection> detections;
-  const ArmorColor target_color = detail::detect_color_from_config(cfg_.detect_color);
+  const ArmorColor target_color = CurrentTargetColor();
 
   const detail::DirectKeypointOutputView output_view(output);
   if (!output_view.Valid())
