@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 /**
  * @file ArmorDetectorRuntime.hpp
  * @brief ArmorDetector 配置、同步帧消费线程和帧级运行时 glue。
