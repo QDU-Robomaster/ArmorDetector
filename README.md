@@ -16,6 +16,7 @@
 输入:
 
 - `CameraFrameSync<Info>::SyncedFrame`
+- 可选 `VisionPreview::RuntimeParam`，只用于本模块实时预览
 
 输出:
 
@@ -56,13 +57,19 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 - `network.min_quad_area_px`: 四边形最小面积，单位为像素平方
 - `network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
 - `network.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
+- `preview.enabled`: detector 实时预览总开关；`false` 时不启动预览线程
+- `preview.preview_window_name`: OpenCV 窗口名
+- `preview.preview_scale`: 显示缩放比例，只影响窗口画面
+- `preview.preview_wait_key_ms`: OpenCV 窗口事件轮询时间，单位 ms
+- `preview.queue_capacity`: 预览队列长度，超过上限时丢弃旧帧
 
 默认设备策略为 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU` 顺序选择可用设备。
 CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 
 ## 边界
 
-- 模块不创建窗口，也不负责绘制预览。
-- 原始视频、可视化和落盘应由独立模块订阅 topic 后处理。
+- 模块只在 `preview.enabled: true` 时创建实时预览窗口。
+- 预览只显示当前 detector overlay，不订阅 topic、不录像、不写 TSV。
+- 原始视频、同步数据和回放包落盘由相机/同步模块负责，不放在 detector 里。
 - 相机参数来自模板参数 `Info`，必须与实际图像尺寸、编码、内参和畸变参数一致。
 - 当前模型输入尺寸固定为 `640x512`。
