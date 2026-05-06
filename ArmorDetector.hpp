@@ -13,6 +13,12 @@ constructor_args:
       min_quad_area_px: 16.0
       openvino_device: "AUTO_DETECT"
       openvino_performance_mode: "LATENCY"
+    preview:
+      enabled: false
+      preview_window_name: "armor_detector_preview"
+      preview_scale: 0.5
+      preview_wait_key_ms: 1
+      queue_capacity: 1
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -28,6 +34,7 @@ template_args:
 required_hardware: []
 depends:
   - qdu-future/CameraFrameSync
+  - qdu-future/VisionPreview@codex/composable-preview-20260506
 === END MANIFEST === */
 // clang-format on
 
@@ -57,6 +64,7 @@ depends:
 #include "ArmorDetectorPnPSolver.hpp"
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
+#include "VisionPreview.hpp"
 
 #ifndef ARMOR_DETECTOR_MODEL_PATH
 #error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
@@ -116,6 +124,7 @@ class ArmorDetector : public LibXR::Application
   {
     int detect_color{1};                 ///< 0=红色，1=蓝色，其他=不限制颜色。
     NetworkParams network{};             ///< 网络 detector 参数。
+    VisionPreview::RuntimeParam preview{}; ///< 可选实时预览配置。
   };
 
   /**
@@ -304,9 +313,16 @@ class ArmorDetector : public LibXR::Application
   void FillResultMessage(const std::vector<CandidateArmor>& armors,
                          const cv::Mat& bgr_img);
 
+  /**
+   * @brief 把当前帧交给轻量预览线程绘制 detector overlay。
+   * @param bgr_img 当前 BGR 图像；Submit 内部会立即深拷贝。
+   */
+  void SubmitPreview(const cv::Mat& bgr_img);
+
  private:
   Config cfg_{};                         ///< 当前 detector 配置。
   Sync& sync_;                           ///< 同步帧来源引用。
+  VisionPreview preview_{};              ///< 可选实时预览工具，不参与主链路同步。
   ArmorDetectorPnPSolver<CameraInfoV> pnp_solver_{};  ///< 装甲板 PnP 求解器。
   uint64_t latest_timestamp_us_{0};      ///< 最近处理图像的传感器时间戳，单位 us。
   uint64_t frame_index_{0};              ///< 已处理帧计数。

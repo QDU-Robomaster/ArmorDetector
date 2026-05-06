@@ -94,6 +94,7 @@ jobs:
           xrobot_add_mod qdu-future/CameraBase@master
           xrobot_add_mod qdu-future/WebotsCamera@master
           xrobot_add_mod qdu-future/CameraFrameSync@master
+          xrobot_add_mod qdu-future/VisionPreview@codex/composable-preview-20260506
           cat Modules/modules.yaml
 
       - name: Sync dependency repos
