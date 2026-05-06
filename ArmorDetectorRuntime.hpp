@@ -44,6 +44,8 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
 {
   cfg_ = cfg;
   counters_ = {};
+  preview_.Stop();
+  preview_.Start(cfg_.preview);
 
   const char* model_path = ARMOR_DETECTOR_MODEL_PATH;
 
@@ -130,6 +132,7 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   armors_frame_topic_.Publish(armors_frame_msg);
   armors_topic_.Publish(armors_msg);
   metrics_topic_.Publish(metrics_msg_);
+  SubmitPreview(bgr_img);
 
   if ((frame_index_ % detail::metrics_log_period) == 0U)
   {
@@ -185,6 +188,72 @@ void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_fr
     return;
   }
   ProcessImage(bgr_img, synced_frame);
+}
+
+/**
+ * @brief 提交 detector 预览帧。
+ *
+ * Submit 会先深拷贝图像；回调捕获的是检测结果快照，避免预览线程读到下一帧复用的
+ * armors_packet_ / metrics_msg_。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param bgr_img 当前 BGR 图像。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
+{
+  if (!preview_.Running())
+  {
+    return;
+  }
+
+  const ArmorDetectionsPacket detections = armors_packet_;
+  const ArmorDetectorMetrics metrics = metrics_msg_;
+  preview_.Submit(
+      bgr_img,
+      [detections, metrics](cv::Mat& canvas)
+      {
+        for (const auto& armor : detections.results)
+        {
+          const cv::Scalar color =
+              armor.color == ArmorColor::RED
+                  ? cv::Scalar(0, 0, 255)
+                  : (armor.color == ArmorColor::BLUE ? cv::Scalar(255, 80, 0)
+                                                     : cv::Scalar(0, 220, 255));
+          for (std::size_t i = 0; i < armor.points.size(); ++i)
+          {
+            cv::line(canvas, armor.points[i],
+                     armor.points[(i + 1U) % armor.points.size()], color, 2,
+                     cv::LINE_AA);
+            cv::circle(canvas, armor.points[i], 3, color, -1, cv::LINE_AA);
+          }
+          cv::circle(canvas, armor.center, 4, cv::Scalar(0, 255, 0), -1,
+                     cv::LINE_AA);
+
+          const auto number_index = static_cast<std::size_t>(armor.number);
+          const std::string number_name =
+              number_index < ARMOR_NUMBER_NAMES.size()
+                  ? std::string(ARMOR_NUMBER_NAMES[number_index])
+                  : std::string("unknown");
+          const std::string label =
+              number_name + " " +
+              std::to_string(static_cast<int>(armor.confidence * 100.0F)) +
+              "% pnp=" + (armor.pnp_valid ? "1" : "0");
+          const cv::Point text_origin(
+              std::max(0, static_cast<int>(armor.box.x)),
+              std::max(18, static_cast<int>(armor.box.y) - 6));
+          cv::putText(canvas, label, text_origin, cv::FONT_HERSHEY_SIMPLEX,
+                      0.55, color, 2, cv::LINE_AA);
+        }
+
+        const std::string header =
+            "detector frame=" + std::to_string(metrics.frame_index) +
+            " armors=" + std::to_string(metrics.armor_count) +
+            " pnp=" + std::to_string(metrics.pnp_success_count);
+        cv::putText(canvas, header, cv::Point(12, 28),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(40, 240, 40),
+                    2, cv::LINE_AA);
+      });
 }
 
 /**
