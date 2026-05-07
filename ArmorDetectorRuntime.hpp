@@ -86,9 +86,9 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   }
 
   XR_LOG_INFO(
-      "ArmorDetector model=%s device=%s mode=%s path=%s",
+      "ArmorDetector model=%s device=%s mode=%s precision=%s path=%s",
       detail::detector_model_name, openvino_device, openvino_performance_mode,
-      model_path);
+      cfg_.network.enable_fp16 ? "FP16" : "FP32", model_path);
   if (cfg_.depth_correction.enabled)
   {
     XR_LOG_INFO(
@@ -97,7 +97,8 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         cfg_.depth_correction.max_abs_correction_m,
         cfg_.depth_correction.min_quad_height_px);
   }
-  network_.Configure(model_path, openvino_device, openvino_performance_mode);
+  network_.Configure(model_path, openvino_device, openvino_performance_mode,
+                     cfg_.network.enable_fp16);
 }
 
 /**

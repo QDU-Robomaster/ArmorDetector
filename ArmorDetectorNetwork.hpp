@@ -13,6 +13,8 @@
 
 #include <opencv2/core.hpp>
 #include <openvino/openvino.hpp>
+#include <openvino/pass/convert_fp32_to_fp16.hpp>
+#include <openvino/pass/manager.hpp>
 
 namespace armor_detector_detail
 {
@@ -32,15 +34,17 @@ class OpenVinoArmorNetwork
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
+   * @param enable_fp16 true 时将模型图转换为 FP16 并让 decoder 直读 FP16 输出。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
   bool Configure(const char* model_path, const char* device_name,
-                 const char* performance_mode)
+                 const char* performance_mode, bool enable_fp16)
   {
     requested_device_name_ = NormalizeDeviceName(device_name);
     available_device_names_ = QueryAvailableDeviceNames();
     device_name_ = ResolveDeviceName(requested_device_name_);
     performance_mode_name_ = NormalizePerformanceModeName(performance_mode);
+    fp16_enabled_ = enable_fp16;
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
@@ -65,6 +69,12 @@ class OpenVinoArmorNetwork
       preprocess.scale(255.0);
 
       model = post_processor.build();
+      if (fp16_enabled_)
+      {
+        ov::pass::Manager pass_manager;
+        pass_manager.register_pass<ov::pass::ConvertFP32ToFP16>();
+        pass_manager.run_passes(model);
+      }
       compiled_model_ = ov_core_.compile_model(
           model, device_name_,
           ov::hint::performance_mode(
@@ -73,9 +83,10 @@ class OpenVinoArmorNetwork
       model_ready_ = true;
       XR_LOG_PASS(
           "ArmorDetector loaded %s model on OpenVINO device %s requested %s "
-          "mode %s",
+          "mode %s precision %s",
           detector_model_name, device_name_.c_str(),
-          requested_device_name_.c_str(), performance_mode_name_.c_str());
+          requested_device_name_.c_str(), performance_mode_name_.c_str(),
+          fp16_enabled_ ? "FP16" : "FP32");
       return true;
     }
     catch (const std::exception& exception)
@@ -157,9 +168,22 @@ class OpenVinoArmorNetwork
         return false;
       }
 
+      const auto output_element_type = output_tensor_.get_element_type();
+      int cv_output_type = CV_32F;
+      if (output_element_type == ov::element::f16)
+      {
+        cv_output_type = CV_16F;
+      }
+      else if (output_element_type != ov::element::f32)
+      {
+        XR_LOG_ERROR("ArmorDetector network output type invalid: %s",
+                     output_element_type.get_type_name().c_str());
+        return false;
+      }
+
       output = cv::Mat(static_cast<int>(output_shape[1]),
-                       static_cast<int>(output_shape[2]), CV_32F,
-                       output_tensor_.data<float>());
+                       static_cast<int>(output_shape[2]), cv_output_type,
+                       output_tensor_.data());
       return !output.empty();
     }
     catch (const std::exception& exception)
@@ -357,6 +381,7 @@ class OpenVinoArmorNetwork
   std::string requested_device_name_{"AUTO_DETECT"};                 ///< 配置请求设备。
   std::string device_name_{"CPU"};                                   ///< OpenVINO 编译设备。
   std::string performance_mode_name_{"LATENCY"};                     ///< OpenVINO 性能模式。
+  bool fp16_enabled_{false};                                        ///< 是否启用 FP16 模型和输出。
   bool model_ready_{false};                                         ///< 模型是否可用。
   NetworkInputShape input_shape_{};                                 ///< 当前模型输入宽高。
   ov::Core ov_core_{};                                               ///< OpenVINO runtime core。

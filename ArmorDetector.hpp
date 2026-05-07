@@ -13,6 +13,7 @@ constructor_args:
       min_quad_area_px: 16.0
       openvino_device: "AUTO_DETECT"
       openvino_performance_mode: "LATENCY"
+      enable_fp16: false
     referee_auto_detect_color: false
     referee_domain: "host"
     referee_topic: "robot_game_ref"
@@ -132,6 +133,7 @@ class ArmorDetector : public LibXR::Application
     const char* openvino_device{"AUTO_DETECT"};
     /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
     const char* openvino_performance_mode{"LATENCY"};
+    bool enable_fp16{false};            ///< 是否将 OpenVINO 模型和输出转换为 FP16。
   };
 
   /**

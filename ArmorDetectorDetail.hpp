@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <cstring>
+
 /**
  * @file ArmorDetectorDetail.hpp
  * @brief ArmorDetector 内部使用的模型常量和轻量几何/语义工具。
@@ -144,16 +147,73 @@ inline DirectKeypointGridCell DirectKeypointGridCellForRow(int row)
 }
 
 /**
+ * @brief 将 IEEE-754 binary16 原始位转换为 float。
+ * @param bits FP16 原始 16-bit 表示。
+ * @return 转换后的 float。
+ */
+inline float Float16BitsToFloat(uint16_t bits)
+{
+  const uint32_t sign = static_cast<uint32_t>(bits & 0x8000U) << 16U;
+  uint32_t exponent = static_cast<uint32_t>((bits >> 10U) & 0x1FU);
+  uint32_t mantissa = static_cast<uint32_t>(bits & 0x03FFU);
+  uint32_t value = 0;
+
+  if (exponent == 0U)
+  {
+    if (mantissa == 0U)
+    {
+      value = sign;
+    }
+    else
+    {
+      exponent = 1U;
+      while ((mantissa & 0x0400U) == 0U)
+      {
+        mantissa <<= 1U;
+        --exponent;
+      }
+      mantissa &= 0x03FFU;
+      value = sign | ((exponent + 112U) << 23U) | (mantissa << 13U);
+    }
+  }
+  else if (exponent == 0x1FU)
+  {
+    value = sign | 0x7F800000U | (mantissa << 13U);
+  }
+  else
+  {
+    value = sign | ((exponent + 112U) << 23U) | (mantissa << 13U);
+  }
+
+  float result = 0.0F;
+  std::memcpy(&result, &value, sizeof(result));
+  return result;
+}
+
+/**
  * @brief dense-grid 模型输出矩阵的轻量视图。
  *
- * 当前生产模型固定输出 `[21,6720]`，行是字段，列是候选。
+ * 当前生产模型固定输出 `[21,6720]`，行是字段，列是候选。输出可为
+ * FP32 或 FP16；FP16 在按字段读取时转换成 float，避免整块输出先转 FP32。
  */
 class DirectKeypointOutputView
 {
  public:
   explicit DirectKeypointOutputView(const cv::Mat& output) : output_(output)
   {
-    if (output_.type() != CV_32F || output_.dims != 2)
+    if (output_.dims != 2)
+    {
+      return;
+    }
+    if (output_.type() == CV_32F)
+    {
+      element_type_ = ElementType::F32;
+    }
+    else if (output_.type() == CV_16F)
+    {
+      element_type_ = ElementType::F16;
+    }
+    else
     {
       return;
     }
@@ -174,11 +234,22 @@ class DirectKeypointOutputView
 
   [[nodiscard]] float At(int row, int field) const
   {
-    return output_.at<float>(field, row);
+    if (element_type_ == ElementType::F32)
+    {
+      return output_.ptr<float>(field)[row];
+    }
+    return Float16BitsToFloat(output_.ptr<uint16_t>(field)[row]);
   }
 
  private:
+  enum class ElementType : uint8_t
+  {
+    F32,
+    F16,
+  };
+
   const cv::Mat& output_;
+  ElementType element_type_{ElementType::F32};
   bool valid_{false};
 };
 
