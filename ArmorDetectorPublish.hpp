@@ -59,19 +59,74 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
             std::isfinite(quad_width) && std::isfinite(pnp_reprojection_error_px) &&
             quad_height >= cfg_.depth_correction.min_quad_height_px)
         {
-          const auto& c = cfg_.depth_correction.coeffs;
-          double dz = c[0] + c[1] * raw_z + c[2] * quad_height +
-                      c[3] * quad_width +
-                      c[4] * pnp_reprojection_error_px +
-                      c[5] * static_cast<double>(quad_center.x) +
-                      c[6] * static_cast<double>(quad_center.y);
+          const double fx = CameraInfoV.camera_matrix[0];
+          const double fy = CameraInfoV.camera_matrix[4];
+          const double cx = CameraInfoV.camera_matrix[2];
+          const double cy = CameraInfoV.camera_matrix[5];
+          const double reprojection_scale = 0.5 * (fx + fy);
+          const bool camera_params_valid =
+              std::isfinite(fx) && std::isfinite(fy) &&
+              std::isfinite(cx) && std::isfinite(cy) &&
+              std::isfinite(reprojection_scale) && fx > 1e-6 &&
+              fy > 1e-6 && reprojection_scale > 1e-6;
 
-          const double correction_limit =
-              std::max(0.0, cfg_.depth_correction.max_abs_correction_m);
-          if (std::isfinite(dz))
+          double feature_height = quad_height;
+          double feature_width = quad_width;
+          double feature_reprojection = pnp_reprojection_error_px;
+          double feature_center_x = static_cast<double>(quad_center.x);
+          double feature_center_y = static_cast<double>(quad_center.y);
+          bool correction_features_valid = true;
+
+          if (cfg_.depth_correction.camera_normalized_features)
           {
-            dz = std::clamp(dz, -correction_limit, correction_limit);
-            tvec.at<double>(2) = raw_z - dz;
+            if (!camera_params_valid)
+            {
+              correction_features_valid = false;
+            }
+            else
+            {
+              feature_height = quad_height / fy;
+              feature_width = quad_width / fx;
+              feature_reprojection = pnp_reprojection_error_px / reprojection_scale;
+              feature_center_x = (static_cast<double>(quad_center.x) - cx) / fx;
+              feature_center_y = (static_cast<double>(quad_center.y) - cy) / fy;
+            }
+          }
+
+          if (correction_features_valid)
+          {
+            const auto& c = cfg_.depth_correction.coeffs;
+            double dz = c[0] + c[1] * raw_z + c[2] * feature_height +
+                        c[3] * feature_width +
+                        c[4] * feature_reprojection +
+                        c[5] * feature_center_x +
+                        c[6] * feature_center_y;
+
+            const double correction_limit =
+                std::max(0.0, cfg_.depth_correction.max_abs_correction_m);
+            if (std::isfinite(dz))
+            {
+              dz = std::clamp(dz, -correction_limit, correction_limit);
+              tvec.at<double>(2) = raw_z - dz;
+            }
+          }
+
+          if (cfg_.depth_correction.height_fusion_enabled && camera_params_valid)
+          {
+            const double armor_height_m = cfg_.depth_correction.armor_height_m;
+            const double height_weight = cfg_.depth_correction.height_fusion_weight;
+            const double current_z = tvec.at<double>(2);
+            const double height_z = armor_height_m * fy / quad_height;
+            const double height_limit =
+                std::max(0.0, cfg_.depth_correction.height_fusion_max_abs_m);
+            if (std::isfinite(armor_height_m) && armor_height_m > 0.0 &&
+                std::isfinite(height_weight) && height_weight > 0.0 &&
+                std::isfinite(current_z) && std::isfinite(height_z))
+            {
+              const double bounded_delta =
+                  std::clamp(height_z - current_z, -height_limit, height_limit);
+              tvec.at<double>(2) = current_z + height_weight * bounded_delta;
+            }
           }
         }
       }

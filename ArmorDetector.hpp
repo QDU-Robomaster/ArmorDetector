@@ -29,9 +29,14 @@ constructor_args:
       web_stream_name: "armor_detector"
     depth_correction:
       enabled: false
+      camera_normalized_features: true
       coeffs: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
       max_abs_correction_m: 0.15
       min_quad_height_px: 1.0
+      height_fusion_enabled: false
+      height_fusion_weight: 0.0
+      height_fusion_max_abs_m: 0.05
+      armor_height_m: 0.056
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -134,18 +139,31 @@ class ArmorDetector : public LibXR::Application
   };
 
   /**
-   * @brief PnP 深度经验修正参数。
+   * @brief PnP 深度修正参数。
    *
-   * 当前模型只修正相机坐标系 z 轴：
+   * 线性模型只修正相机坐标系 z 轴：
    * dz = c0 + c1*z + c2*quad_h + c3*quad_w + c4*reproj + c5*cx + c6*cy。
+   *
+   * 默认使用相机归一化特征：
+   * quad_h/fy、quad_w/fx、reproj/((fx+fy)/2)、(cx-cx0)/fx、(cy-cy0)/fy。
+   * 关闭 camera_normalized_features 时保留旧实验用裸像素特征。
    * 发布位姿使用 z_corrected = z - clamp(dz)。
+   *
+   * height_fusion 是可选的物理高度一致性约束：
+   * z_height = armor_height_m * fy / quad_h_px。
+   * 它复用同一组检测角点，只能作为弱约束，不能替代新的独立深度观测。
    */
   struct DepthCorrectionParams
   {
     bool enabled{false};                 ///< 是否启用 detector 侧 PnP z 修正。
+    bool camera_normalized_features{true}; ///< 是否使用相机内参归一化像素特征。
     std::array<double, 7> coeffs{};      ///< 线性修正系数，顺序见结构体说明。
     double max_abs_correction_m{0.15};   ///< 单次 z 修正绝对值上限，单位 m。
     double min_quad_height_px{1.0};      ///< 四边形高度低于该值时跳过修正。
+    bool height_fusion_enabled{false};   ///< 是否融合物理高度估计的 z。
+    double height_fusion_weight{0.0};    ///< 向高度估计靠拢的比例，建议 0~1。
+    double height_fusion_max_abs_m{0.05}; ///< 高度融合单次修正上限，单位 m。
+    double armor_height_m{0.056};        ///< 装甲板灯条有效高度，单位 m。
   };
 
   /**

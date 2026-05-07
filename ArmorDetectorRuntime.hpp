@@ -92,9 +92,14 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   if (cfg_.depth_correction.enabled)
   {
     XR_LOG_INFO(
-        "ArmorDetector depth correction enabled max_abs=%.3f min_quad_h=%.3f",
+        "ArmorDetector depth correction enabled features=%s max_abs=%.3f min_quad_h=%.3f height_fusion=%d height_w=%.3f height_max=%.3f armor_h=%.3f",
+        cfg_.depth_correction.camera_normalized_features ? "camera_norm" : "pixel",
         cfg_.depth_correction.max_abs_correction_m,
-        cfg_.depth_correction.min_quad_height_px);
+        cfg_.depth_correction.min_quad_height_px,
+        cfg_.depth_correction.height_fusion_enabled ? 1 : 0,
+        cfg_.depth_correction.height_fusion_weight,
+        cfg_.depth_correction.height_fusion_max_abs_m,
+        cfg_.depth_correction.armor_height_m);
   }
   network_.Configure(model_path, openvino_device, openvino_performance_mode);
 }
