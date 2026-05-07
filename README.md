@@ -67,11 +67,10 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 - `preview.preview_scale`: 显示缩放比例，只影响窗口画面
 - `preview.preview_wait_key_ms`: OpenCV 窗口事件轮询时间，单位 ms
 - `preview.queue_capacity`: 预览队列长度，超过上限时丢弃旧帧
-- `preview.output_mode`: 预览输出模式；`window` 使用 OpenCV 窗口，`mjpeg` 使用 HTTP MJPEG 推流
-- `preview.web_bind_address`: MJPEG 监听地址，默认 `0.0.0.0`
-- `preview.web_port`: MJPEG 监听端口，默认 `8080`
-- `preview.web_jpeg_quality`: MJPEG JPEG 编码质量，默认 `80`
-- `preview.web_stream_name`: MJPEG stream 名，默认 `armor_detector`
+- `preview.output_mode`: 预览输出模式；`window` 使用 OpenCV 窗口，`raw` / `web` / `http` / `bmp` 使用未压缩 BMP 推流
+- `preview.web_bind_address`: web 监听地址，默认 `0.0.0.0`
+- `preview.web_port`: web 监听端口，默认 `8080`
+- `preview.web_stream_name`: web stream 名，默认 `armor_detector`
 
 默认设备策略为 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU` 顺序选择可用设备。
 CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。

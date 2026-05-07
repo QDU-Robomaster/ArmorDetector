@@ -25,7 +25,6 @@ constructor_args:
       output_mode: "window"
       web_bind_address: "0.0.0.0"
       web_port: 8080
-      web_jpeg_quality: 80
       web_stream_name: "armor_detector"
     depth_correction:
       enabled: false
