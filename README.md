@@ -71,6 +71,7 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 - `preview.web_bind_address`: web 监听地址，默认 `0.0.0.0`
 - `preview.web_port`: web 监听端口，默认 `8080`
 - `preview.web_stream_name`: web stream 名，默认 `armor_detector`
+- `preview.max_fps`: 预览最大接受帧率，默认 `30.0`；小于等于 `0` 表示不限频
 
 默认设备策略为 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU` 顺序选择可用设备。
 CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。

@@ -26,6 +26,7 @@ constructor_args:
       web_bind_address: "0.0.0.0"
       web_port: 8080
       web_stream_name: "armor_detector"
+      max_fps: 30.0
     depth_correction:
       enabled: false
       camera_normalized_features: true
