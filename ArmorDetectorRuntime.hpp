@@ -90,6 +90,13 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
       "ArmorDetector model=%s device=%s mode=%s path=%s",
       detail::detector_model_name, openvino_device, openvino_performance_mode,
       model_path);
+  if (cfg_.depth_correction.enabled)
+  {
+    XR_LOG_INFO(
+        "ArmorDetector depth correction enabled max_abs=%.3f min_quad_h=%.3f",
+        cfg_.depth_correction.max_abs_correction_m,
+        cfg_.depth_correction.min_quad_height_px);
+  }
   network_.Configure(model_path, openvino_device, openvino_performance_mode);
 }
 

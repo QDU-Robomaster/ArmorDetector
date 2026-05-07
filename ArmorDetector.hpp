@@ -27,6 +27,11 @@ constructor_args:
       web_port: 8080
       web_jpeg_quality: 80
       web_stream_name: "armor_detector"
+    depth_correction:
+      enabled: false
+      coeffs: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      max_abs_correction_m: 0.15
+      min_quad_height_px: 1.0
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -128,6 +133,21 @@ class ArmorDetector : public LibXR::Application
   };
 
   /**
+   * @brief PnP 深度经验修正参数。
+   *
+   * 当前模型只修正相机坐标系 z 轴：
+   * dz = c0 + c1*z + c2*quad_h + c3*quad_w + c4*reproj + c5*cx + c6*cy。
+   * 发布位姿使用 z_corrected = z - clamp(dz)。
+   */
+  struct DepthCorrectionParams
+  {
+    bool enabled{false};                 ///< 是否启用 detector 侧 PnP z 修正。
+    std::array<double, 7> coeffs{};      ///< 线性修正系数，顺序见结构体说明。
+    double max_abs_correction_m{0.15};   ///< 单次 z 修正绝对值上限，单位 m。
+    double min_quad_height_px{1.0};      ///< 四边形高度低于该值时跳过修正。
+  };
+
+  /**
    * @brief ArmorDetector 模块配置。
    */
   struct Config
@@ -138,6 +158,7 @@ class ArmorDetector : public LibXR::Application
     const char* referee_domain{"host"};  ///< 裁判系统所在主题域。
     const char* referee_topic{"robot_game_ref"}; ///< 裁判系统摘要包主题名。
     VisionPreview::RuntimeParam preview{}; ///< 可选实时预览配置。
+    DepthCorrectionParams depth_correction{}; ///< 可选 PnP 深度修正配置。
   };
 
   /**

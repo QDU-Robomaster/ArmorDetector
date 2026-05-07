@@ -57,6 +57,10 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 - `network.min_quad_area_px`: 四边形最小面积，单位为像素平方
 - `network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
 - `network.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
+- `depth_correction.enabled`: PnP 深度修正总开关，默认关闭；关闭时发布原始 PnP 位姿
+- `depth_correction.coeffs`: 线性深度修正系数，顺序为常数项、`pose_z`、四边形高度、四边形宽度、PnP 重投影误差、四边形中心 x、四边形中心 y
+- `depth_correction.max_abs_correction_m`: 单次 z 修正绝对值上限，单位 m
+- `depth_correction.min_quad_height_px`: 四边形平均高度低于该值时跳过修正
 - `preview.enabled`: detector 实时预览总开关；`false` 时不启动预览线程
 - `preview.preview_window_name`: OpenCV 窗口名
 - `preview.preview_scale`: 显示缩放比例，只影响窗口画面
@@ -75,6 +79,7 @@ CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 
 - 模块只在 `preview.enabled: true` 时启动实时预览。
 - 预览只显示当前 detector overlay，不订阅 topic、不录像、不写 TSV。
+- 深度修正只改相机坐标系下的 z，不改角点、旋转或 x/y；系数需要用对应相机/模型/场景数据重新标定。
 - 原始视频、同步数据和回放包落盘由相机/同步模块负责，不放在 detector 里。
 - 相机参数来自模板参数 `Info`，必须与实际图像尺寸、编码、内参和畸变参数一致。
 - 当前模型输入尺寸固定为 `640x512`。
