@@ -29,6 +29,7 @@ constructor_args:
       web_stream_name: "armor_detector"
     depth_correction:
       enabled: false
+      camera_normalized_features: true
       coeffs: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
       max_abs_correction_m: 0.15
       min_quad_height_px: 1.0
@@ -134,15 +135,20 @@ class ArmorDetector : public LibXR::Application
   };
 
   /**
-   * @brief PnP 深度经验修正参数。
+   * @brief PnP 深度修正参数。
    *
-   * 当前模型只修正相机坐标系 z 轴：
+   * 线性模型只修正相机坐标系 z 轴：
    * dz = c0 + c1*z + c2*quad_h + c3*quad_w + c4*reproj + c5*cx + c6*cy。
+   *
+   * 默认使用相机归一化特征：
+   * quad_h/fy、quad_w/fx、reproj/((fx+fy)/2)、(cx-cx0)/fx、(cy-cy0)/fy。
+   * 关闭 camera_normalized_features 时保留旧实验用裸像素特征。
    * 发布位姿使用 z_corrected = z - clamp(dz)。
    */
   struct DepthCorrectionParams
   {
     bool enabled{false};                 ///< 是否启用 detector 侧 PnP z 修正。
+    bool camera_normalized_features{true}; ///< 是否使用相机内参归一化像素特征。
     std::array<double, 7> coeffs{};      ///< 线性修正系数，顺序见结构体说明。
     double max_abs_correction_m{0.15};   ///< 单次 z 修正绝对值上限，单位 m。
     double min_quad_height_px{1.0};      ///< 四边形高度低于该值时跳过修正。
