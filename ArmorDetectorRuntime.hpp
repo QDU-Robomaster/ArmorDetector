@@ -234,9 +234,10 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
 
   DetectionMessage armors_frame_msg = &armors_frame_packet_;
   ArmorDetectionsMessage armors_msg = &armors_packet_;
-  armors_frame_topic_.Publish(armors_frame_msg);
-  armors_topic_.Publish(armors_msg);
-  metrics_topic_.Publish(metrics_msg_);
+  const LibXR::MicrosecondTimestamp publish_timestamp(image_timestamp_us);
+  armors_frame_topic_.Publish(armors_frame_msg, publish_timestamp);
+  armors_topic_.Publish(armors_msg, publish_timestamp);
+  metrics_topic_.Publish(metrics_msg_, publish_timestamp);
   SubmitPreview(bgr_img);
 
   if ((frame_index_ % detail::metrics_log_period) == 0U)
