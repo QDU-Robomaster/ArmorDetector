@@ -58,7 +58,8 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 - `network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
 - `network.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
 - `depth_correction.enabled`: PnP 深度修正总开关，默认关闭；关闭时发布原始 PnP 位姿
-- `depth_correction.coeffs`: 线性深度修正系数，顺序为常数项、`pose_z`、四边形高度、四边形宽度、PnP 重投影误差、四边形中心 x、四边形中心 y
+- `depth_correction.camera_normalized_features`: 是否使用相机内参归一化像素特征，默认开启；开启后四边形高度使用 `h/fy`，宽度使用 `w/fx`，重投影误差使用 `err/((fx+fy)/2)`，中心使用 `(x-cx)/fx` 和 `(y-cy)/fy`
+- `depth_correction.coeffs`: 线性深度修正系数，顺序为常数项、`pose_z`、四边形高度特征、四边形宽度特征、PnP 重投影误差特征、四边形中心 x 特征、四边形中心 y 特征
 - `depth_correction.max_abs_correction_m`: 单次 z 修正绝对值上限，单位 m
 - `depth_correction.min_quad_height_px`: 四边形平均高度低于该值时跳过修正
 - `preview.enabled`: detector 实时预览总开关；`false` 时不启动预览线程
