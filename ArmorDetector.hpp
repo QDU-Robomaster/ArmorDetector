@@ -64,6 +64,7 @@ depends:
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -381,7 +382,7 @@ class ArmorDetector : public LibXR::Application
   ArmorDetectorPnPSolver<CameraInfoV> pnp_solver_{};  ///< 装甲板 PnP 求解器。
   uint64_t latest_timestamp_us_{0};      ///< 最近处理图像的传感器时间戳，单位 us。
   uint64_t frame_index_{0};              ///< 已处理帧计数。
-  LibXR::Thread sync_frame_thread_{};    ///< 后台同步帧消费线程。
+  std::thread sync_frame_thread_{};      ///< 后台同步帧消费线程。
   FrameCounters counters_{};             ///< 当前帧内部计数器。
   detail::OpenVinoArmorNetwork network_{}; ///< OpenVINO 网络封装。
 

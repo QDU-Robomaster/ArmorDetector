@@ -54,11 +54,6 @@ constexpr uint32_t sync_frame_wait_timeout_ms = 100;
 constexpr uint32_t metrics_log_period = 30;
 
 /**
- * @brief 同步帧 worker 线程栈大小。
- */
-constexpr size_t sync_frame_thread_stack_size = 1024U * 128U;
-
-/**
  * @brief detector 网络输入尺寸。
  */
 struct NetworkInputShape

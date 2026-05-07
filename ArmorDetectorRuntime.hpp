@@ -51,9 +51,8 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
     referee_topic_.RegisterCallback(referee_callback_);
   }
 
-  sync_frame_thread_.Create(this, SyncFrameThreadFun, "ArmorDetSync",
-                            detail::sync_frame_thread_stack_size,
-                            LibXR::Thread::Priority::HIGH);
+  sync_frame_thread_ = std::thread(SyncFrameThreadFun, this);
+  sync_frame_thread_.detach();
 
   app.Register(*this);
 }
