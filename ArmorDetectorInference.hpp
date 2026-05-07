@@ -54,7 +54,7 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
 /**
  * @brief 将原始图像拉伸成 dense-grid 模型输入。
  *
- * mapping 描述 640x512 模型输入坐标如何还原到原始图像坐标。
+ * mapping 描述当前模型输入坐标如何还原到原始图像坐标。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param bgr_img 原始 BGR 图像。
@@ -100,11 +100,15 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   std::vector<NetworkDetection> detections;
   const ArmorColor target_color = CurrentTargetColor();
 
-  const detail::DirectKeypointOutputView output_view(output);
+  const auto input_shape = network_.InputShape();
+  const detail::DirectKeypointOutputView output_view(output, input_shape);
   if (!output_view.Valid())
   {
-    XR_LOG_ERROR("ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=21x6720",
-                 output.rows, output.cols, output.type());
+    XR_LOG_ERROR(
+        "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=21x%d input=%dx%d",
+        output.rows, output.cols, output.type(),
+        detail::DirectKeypointCandidateCount(input_shape),
+        input_shape.width, input_shape.height);
     ++counters_.discarded_count;
     return {};
   }
@@ -273,7 +277,7 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
       output, row, detail::DirectKeypointOutputLayout::number_begin,
       detail::DirectKeypointOutputLayout::number_end);
 
-  const auto cell = detail::DirectKeypointGridCellForRow(row);
+  const auto cell = detail::DirectKeypointGridCellForRow(network_.InputShape(), row);
   std::array<cv::Point2f, 4> declared_points{};
   for (int point_index = 0; point_index < 4; ++point_index)
   {

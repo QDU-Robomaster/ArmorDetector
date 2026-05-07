@@ -32,24 +32,37 @@ class OpenVinoArmorNetwork
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
+   * @param input_shape 模型输入宽高。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
   bool Configure(const char* model_path, const char* device_name,
-                 const char* performance_mode)
+                 const char* performance_mode,
+                 const NetworkInputShape& input_shape)
   {
-    requested_device_name_ = NormalizeDeviceName(device_name);
-    available_device_names_ = QueryAvailableDeviceNames();
-    device_name_ = ResolveDeviceName(requested_device_name_);
-    performance_mode_name_ = NormalizePerformanceModeName(performance_mode);
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
     output_tensor_ = ov::Tensor();
+    input_shape_ = input_shape;
+    if (!IsValidNetworkInputShape(input_shape_))
+    {
+      XR_LOG_ERROR("ArmorDetector invalid network input shape %dx%d; expect positive multiples of 32",
+                   input_shape_.width, input_shape_.height);
+      return false;
+    }
+
+    requested_device_name_ = NormalizeDeviceName(device_name);
+    available_device_names_ = QueryAvailableDeviceNames();
+    device_name_ = ResolveDeviceName(requested_device_name_);
+    performance_mode_name_ = NormalizePerformanceModeName(performance_mode);
 
     try
     {
       LogDeviceSelection();
       auto model = ov_core_.read_model(model_path);
+      const auto input_name = model->input().get_any_name();
+      model->reshape({{input_name, ov::PartialShape{1, 3, input_shape_.height,
+                                                    input_shape_.width}}});
       ov::preprocess::PrePostProcessor post_processor(model);
       auto& input = post_processor.input();
 
@@ -160,6 +173,17 @@ class OpenVinoArmorNetwork
       output = cv::Mat(static_cast<int>(output_shape[1]),
                        static_cast<int>(output_shape[2]), CV_32F,
                        output_tensor_.data<float>());
+      const auto expected_candidate_count = DirectKeypointCandidateCount(input_shape_);
+      if (expected_candidate_count <= 0 ||
+          output.rows != direct_keypoint_output_width ||
+          output.cols != expected_candidate_count)
+      {
+        XR_LOG_ERROR(
+            "ArmorDetector network output shape invalid: rows=%d cols=%d expected=21x%d",
+            output.rows, output.cols, expected_candidate_count);
+        output.release();
+        return false;
+      }
       return !output.empty();
     }
     catch (const std::exception& exception)

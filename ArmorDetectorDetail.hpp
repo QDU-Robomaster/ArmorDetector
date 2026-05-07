@@ -16,22 +16,22 @@ namespace armor_detector_detail
 /**
  * @brief dense-grid keypoint detector 输入宽度。
  */
-constexpr int direct_keypoint_input_width = 640;
+constexpr int direct_keypoint_input_width = 512;
 
 /**
  * @brief dense-grid keypoint detector 输入高度。
  */
-constexpr int direct_keypoint_input_height = 512;
+constexpr int direct_keypoint_input_height = 384;
 
 /**
  * @brief detector 模型日志名称。
  */
-inline constexpr const char* detector_model_name = "direct_keypoint_640x512";
+inline constexpr const char* detector_model_name = "direct_keypoint_512x384";
 
 /**
  * @brief dense-grid keypoint detector 的输出候选数量。
  */
-constexpr int direct_keypoint_candidate_count = 6720;
+constexpr int direct_keypoint_candidate_count = 4032;
 
 /**
  * @brief dense-grid keypoint detector 的输出列数。
@@ -61,6 +61,37 @@ struct NetworkInputShape
   int width{direct_keypoint_input_width};   ///< 输入宽度，单位 px。
   int height{direct_keypoint_input_height}; ///< 输入高度，单位 px。
 };
+
+/**
+ * @brief 判断 dense-grid 模型输入尺寸是否满足当前 decoder 假设。
+ * @param shape 输入宽高。
+ * @return 宽高均为正且是最大检测 stride 32 的整数倍时返回 true。
+ */
+inline bool IsValidNetworkInputShape(const NetworkInputShape& shape)
+{
+  return shape.width > 0 && shape.height > 0 &&
+         shape.width % 32 == 0 && shape.height % 32 == 0;
+}
+
+/**
+ * @brief 计算 dense-grid keypoint detector 在给定输入尺寸下的候选数量。
+ *
+ * 当前模型有 stride 8/16/32 三个检测层，每个网格单元一个候选。
+ *
+ * @param shape 输入宽高。
+ * @return 输出候选数量；尺寸非法时返回 0。
+ */
+inline int DirectKeypointCandidateCount(const NetworkInputShape& shape)
+{
+  if (!IsValidNetworkInputShape(shape))
+  {
+    return 0;
+  }
+
+  return (shape.width / 8) * (shape.height / 8) +
+         (shape.width / 16) * (shape.height / 16) +
+         (shape.width / 32) * (shape.height / 32);
+}
 
 /**
  * @brief 网络输入坐标到原始图像坐标的映射。
@@ -110,22 +141,22 @@ struct DirectKeypointGridCell
 
 /**
  * @brief 将 dense-grid 输出行号转换为网格中心和 stride。
- * @param row 输出行号，范围为 [0, direct_keypoint_candidate_count)。
+ * @param shape 当前网络输入尺寸。
+ * @param row 输出行号，范围为 [0, DirectKeypointCandidateCount(shape))。
  * @return 对应网格单元；越界时返回最后一层的兜底单元。
  */
-inline DirectKeypointGridCell DirectKeypointGridCellForRow(int row)
+inline DirectKeypointGridCell DirectKeypointGridCellForRow(
+    const NetworkInputShape& shape, int row)
 {
-  if (row < 0)
+  if (row < 0 || !IsValidNetworkInputShape(shape))
   {
     return {};
   }
 
-  constexpr int stride8_cols = direct_keypoint_input_width / 8;
-  constexpr int stride8_count =
-      stride8_cols * (direct_keypoint_input_height / 8);
-  constexpr int stride16_cols = direct_keypoint_input_width / 16;
-  constexpr int stride16_count =
-      stride16_cols * (direct_keypoint_input_height / 16);
+  const int stride8_cols = shape.width / 8;
+  const int stride8_count = stride8_cols * (shape.height / 8);
+  const int stride16_cols = shape.width / 16;
+  const int stride16_count = stride16_cols * (shape.height / 16);
 
   if (row < stride8_count)
   {
@@ -139,19 +170,22 @@ inline DirectKeypointGridCell DirectKeypointGridCellForRow(int row)
   }
 
   row -= stride16_count;
-  constexpr int stride32_cols = direct_keypoint_input_width / 32;
+  const int stride32_cols = shape.width / 32;
   return {(row % stride32_cols) * 32, (row / stride32_cols) * 32, 32};
 }
 
 /**
  * @brief dense-grid 模型输出矩阵的轻量视图。
  *
- * 当前生产模型固定输出 `[21,6720]`，行是字段，列是候选。
+ * 当前模型输出为 `[21,N]`，行是字段，列是候选；N 由输入尺寸决定。
  */
 class DirectKeypointOutputView
 {
  public:
-  explicit DirectKeypointOutputView(const cv::Mat& output) : output_(output)
+  DirectKeypointOutputView(const cv::Mat& output,
+                           const NetworkInputShape& input_shape)
+      : output_(output),
+        candidate_count_(DirectKeypointCandidateCount(input_shape))
   {
     if (output_.type() != CV_32F || output_.dims != 2)
     {
@@ -159,7 +193,7 @@ class DirectKeypointOutputView
     }
 
     if (output_.rows == direct_keypoint_output_width &&
-        output_.cols == direct_keypoint_candidate_count)
+        output_.cols == candidate_count_)
     {
       valid_ = true;
     }
@@ -169,7 +203,7 @@ class DirectKeypointOutputView
 
   [[nodiscard]] int CandidateCount() const
   {
-    return valid_ ? direct_keypoint_candidate_count : 0;
+    return valid_ ? candidate_count_ : 0;
   }
 
   [[nodiscard]] float At(int row, int field) const
@@ -179,6 +213,7 @@ class DirectKeypointOutputView
 
  private:
   const cv::Mat& output_;
+  int candidate_count_{0};
   bool valid_{false};
 };
 

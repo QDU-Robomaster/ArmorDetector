@@ -152,6 +152,8 @@ jobs:
                     min_confidence: 0.1
                     enable_quad_check: true
                     min_quad_area_px: 16.0
+                    input_width: 512
+                    input_height: 384
                     openvino_device: CPU
                     openvino_performance_mode: LATENCY
                 sync: '@camera_frame_sync'

@@ -26,11 +26,14 @@
 
 模型文件:
 
+- `model/armor_keypoint_512x384_bgr.xml`
+- `model/armor_keypoint_512x384_bgr.bin`
 - `model/armor_keypoint_640x512_bgr.xml`
 - `model/armor_keypoint_640x512_bgr.bin`
 - `model/armor_keypoint_640x512_bgr.onnx`
 
-OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使用 `.onnx` 文件。
+OpenVINO 默认使用 `512x384` `.xml/.bin` 文件；`640x512` 文件保留用于回退
+和对照评估。需要接入其他推理后端时使用 `.onnx` 文件。
 
 ## 结果内容
 
@@ -55,6 +58,8 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 - `network.min_confidence`: 最终结果置信度门限
 - `network.enable_quad_check`: 是否启用四边形面积检查
 - `network.min_quad_area_px`: 四边形最小面积，单位为像素平方
+- `network.input_width`: OpenVINO 模型输入宽度，默认 `512`；必须为正且是 `32` 的整数倍
+- `network.input_height`: OpenVINO 模型输入高度，默认 `384`；必须为正且是 `32` 的整数倍
 - `network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
 - `network.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
 - `depth_correction.enabled`: PnP 深度修正总开关，默认关闭；关闭时发布原始 PnP 位姿
@@ -84,4 +89,7 @@ CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 - 线性深度修正系数需要用对应相机、模型、场景数据重新标定；不要把裸像素系数跨相机复用。
 - 原始视频、同步数据和回放包落盘由相机/同步模块负责，不放在 detector 里。
 - 相机参数来自模板参数 `Info`，必须与实际图像尺寸、编码、内参和畸变参数一致。
-- 当前模型输入尺寸固定为 `640x512`。
+- 当前默认模型输入为 `512x384`，输出候选数为 `4032`。OpenVINO XML 模型会在
+  加载时按 `network.input_width/input_height` reshape；decoder 的候选数量也按
+  stride 8/16/32 动态计算。小输入会降低推理计算量，但视野/精度需要用实际录像
+  重新评估。
