@@ -274,10 +274,10 @@ class ArmorDetector : public LibXR::Application
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img);
 
   /**
-   * @brief 构建网络输入图像并记录输入坐标到源图像坐标的映射。
+   * @brief 构建网络后端输入图像并记录模型坐标到源图像坐标的映射。
    * @param bgr_img 原始 BGR 图像。
    * @param mapping 输出坐标映射。
-   * @return 网络输入尺寸的 BGR8 图像。
+   * @return 原始 BGR8 图像视图，OpenVINO 预处理图会执行模型输入 resize。
    */
   cv::Mat BuildNetworkInput(const cv::Mat& bgr_img,
                             detail::NetworkInputMapping& mapping) const;

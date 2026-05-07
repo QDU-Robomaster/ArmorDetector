@@ -52,14 +52,15 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
 }
 
 /**
- * @brief 将原始图像拉伸成 dense-grid 模型输入。
+ * @brief 构建 dense-grid 模型后端输入视图。
  *
- * mapping 描述 640x512 模型输入坐标如何还原到原始图像坐标。
+ * OpenVINO 预处理图负责把该 BGR 图像缩放到模型固定的 640x512 输入平面。
+ * mapping 描述 640x512 模型输出坐标如何还原到原始图像坐标。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param bgr_img 原始 BGR 图像。
  * @param mapping 输出的坐标还原映射。
- * @return 网络输入尺寸 BGR8 图像；输入空图时返回空 Mat。
+ * @return 原始 BGR8 图像视图；输入空图时返回空 Mat。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
@@ -76,9 +77,7 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
   mapping.y_scale =
       static_cast<double>(bgr_img.rows) / std::max(1, input_shape.height);
 
-  cv::Mat input;
-  cv::resize(bgr_img, input, cv::Size(input_shape.width, input_shape.height));
-  return input;
+  return bgr_img;
 }
 
 /**

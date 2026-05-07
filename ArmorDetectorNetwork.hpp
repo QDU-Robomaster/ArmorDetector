@@ -32,15 +32,22 @@ class OpenVinoArmorNetwork
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
+   * @param source_width 源图像宽度。
+   * @param source_height 源图像高度。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
   bool Configure(const char* model_path, const char* device_name,
-                 const char* performance_mode)
+                 const char* performance_mode, int source_width,
+                 int source_height)
   {
     requested_device_name_ = NormalizeDeviceName(device_name);
     available_device_names_ = QueryAvailableDeviceNames();
     device_name_ = ResolveDeviceName(requested_device_name_);
     performance_mode_name_ = NormalizePerformanceModeName(performance_mode);
+    source_shape_.width =
+        (source_width > 0) ? source_width : input_shape_.width;
+    source_shape_.height =
+        (source_height > 0) ? source_height : input_shape_.height;
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
@@ -55,12 +62,13 @@ class OpenVinoArmorNetwork
 
       input.tensor()
           .set_element_type(ov::element::u8)
-          .set_shape(ov::PartialShape{1, input_shape_.height,
-                                      input_shape_.width, 3})
           .set_layout("NHWC")
-          .set_color_format(ov::preprocess::ColorFormat::BGR);
+          .set_color_format(ov::preprocess::ColorFormat::BGR)
+          .set_spatial_static_shape(static_cast<size_t>(source_shape_.height),
+                                    static_cast<size_t>(source_shape_.width));
       input.model().set_layout("NCHW");
       auto& preprocess = input.preprocess();
+      preprocess.resize(ov::preprocess::ResizeAlgorithm::RESIZE_LINEAR);
       preprocess.convert_element_type(ov::element::f32);
       preprocess.scale(255.0);
 
@@ -73,9 +81,10 @@ class OpenVinoArmorNetwork
       model_ready_ = true;
       XR_LOG_PASS(
           "ArmorDetector loaded %s model on OpenVINO device %s requested %s "
-          "mode %s",
+          "mode %s source=%dx%d",
           detector_model_name, device_name_.c_str(),
-          requested_device_name_.c_str(), performance_mode_name_.c_str());
+          requested_device_name_.c_str(), performance_mode_name_.c_str(),
+          source_shape_.width, source_shape_.height);
       return true;
     }
     catch (const std::exception& exception)
@@ -125,7 +134,10 @@ class OpenVinoArmorNetwork
   [[nodiscard]] NetworkInputShape InputShape() const { return input_shape_; }
 
   /**
-   * @brief 对一帧已经 resize 到模型输入尺寸的 BGR 图像执行推理。
+   * @brief 对一帧原始 BGR 图像执行推理。
+   *
+   * OpenVINO 预处理图负责把输入图像缩放到模型固定的 640x512 平面。
+   *
    * @param input NHWC BGR8 输入图像。
    * @param output 输出矩阵视图，行是候选，列是 keypoint/score/class 字段。
    * @return 推理成功且输出非空时返回 true。
@@ -137,14 +149,38 @@ class OpenVinoArmorNetwork
     {
       return false;
     }
+    if (input.cols != source_shape_.width || input.rows != source_shape_.height)
+    {
+      XR_LOG_ERROR(
+          "ArmorDetector network input shape invalid: got=%dx%d expected=%dx%d",
+          input.cols, input.rows, source_shape_.width, source_shape_.height);
+      return false;
+    }
+    if (input.type() != CV_8UC3)
+    {
+      XR_LOG_ERROR("ArmorDetector network input type invalid: type=%d expected=CV_8UC3",
+                   input.type());
+      return false;
+    }
 
     try
     {
-      ov::Tensor input_tensor(
-          ov::element::u8,
-          ov::Shape{1, static_cast<size_t>(input_shape_.height),
-                    static_cast<size_t>(input_shape_.width), 3},
-          input.data);
+      const ov::Shape input_tensor_shape{
+          1, static_cast<size_t>(input.rows), static_cast<size_t>(input.cols),
+          3};
+      ov::Tensor input_tensor;
+      if (input.isContinuous())
+      {
+        input_tensor =
+            ov::Tensor(ov::element::u8, input_tensor_shape, input.data);
+      }
+      else
+      {
+        input_tensor = ov::Tensor(
+            ov::element::u8, input_tensor_shape, input.data,
+            ov::Strides{static_cast<size_t>(input.rows) * input.step[0],
+                        input.step[0], input.elemSize(), input.elemSize1()});
+      }
       infer_request_.set_input_tensor(input_tensor);
       infer_request_.infer();
 
@@ -359,6 +395,7 @@ class OpenVinoArmorNetwork
   std::string performance_mode_name_{"LATENCY"};                     ///< OpenVINO 性能模式。
   bool model_ready_{false};                                         ///< 模型是否可用。
   NetworkInputShape input_shape_{};                                 ///< 当前模型输入宽高。
+  NetworkInputShape source_shape_{};                                ///< OpenVINO 输入 tensor 的源图像宽高。
   ov::Core ov_core_{};                                               ///< OpenVINO runtime core。
   ov::CompiledModel compiled_model_{};                               ///< 已编译的 OpenVINO 模型。
   ov::InferRequest infer_request_{};                                 ///< 复用的同步推理请求。

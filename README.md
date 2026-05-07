@@ -6,7 +6,7 @@
 ## 数据流
 
 1. 读取 `CameraFrameSync<Info>::SyncedFrame`
-2. 将图像缩放到模型输入尺寸并执行 OpenVINO 推理
+2. 将原始 BGR 图像交给 OpenVINO，预处理图缩放到模型输入尺寸并执行推理
 3. 解码候选装甲板，过滤低置信度或几何异常的结果
 4. 对有效结果执行 PnP
 5. 发布检测结果、原始帧引用和运行指标
@@ -76,6 +76,11 @@ OpenVINO 默认使用 `.xml/.bin` 文件；需要接入其他推理后端时使�
 默认设备策略为 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU` 顺序选择可用设备。
 CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 
+网络输入 resize 在 OpenVINO 预处理图内执行；detector 不再先用 CPU
+`cv::resize()` 生成 `640x512` 中间图。Hik 的紧 packed `BGR8` 帧会直接作为
+输入 tensor 绑定，非连续 Mat 只通过 stride 信息兜底。OpenVINO 输入 tensor
+尺寸来自 `CameraInfoV.width/height`，模型推理平面仍固定为 `640x512`。
+
 ## 边界
 
 - 模块只在 `preview.enabled: true` 时启动实时预览。
@@ -84,4 +89,4 @@ CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 - 线性深度修正系数需要用对应相机、模型、场景数据重新标定；不要把裸像素系数跨相机复用。
 - 原始视频、同步数据和回放包落盘由相机/同步模块负责，不放在 detector 里。
 - 相机参数来自模板参数 `Info`，必须与实际图像尺寸、编码、内参和畸变参数一致。
-- 当前模型输入尺寸固定为 `640x512`。
+- 当前模型推理平面固定为 `640x512`；OpenVINO 输入 tensor 的图像宽高来自编译期相机参数。
