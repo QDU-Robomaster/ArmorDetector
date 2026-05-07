@@ -92,7 +92,8 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   if (cfg_.depth_correction.enabled)
   {
     XR_LOG_INFO(
-        "ArmorDetector depth correction enabled max_abs=%.3f min_quad_h=%.3f",
+        "ArmorDetector depth correction enabled features=%s max_abs=%.3f min_quad_h=%.3f",
+        cfg_.depth_correction.camera_normalized_features ? "camera_norm" : "pixel",
         cfg_.depth_correction.max_abs_correction_m,
         cfg_.depth_correction.min_quad_height_px);
   }
