@@ -124,74 +124,10 @@ class ArmorDetector : public LibXR::Application
    */
   struct NetworkParams
   {
-    constexpr NetworkParams() = default;
-
-    constexpr NetworkParams(double score_threshold_in,
-                            double min_confidence_in,
-                            bool enable_quad_check_in,
-                            double min_quad_area_px_in)
-        : score_threshold(score_threshold_in),
-          min_confidence(min_confidence_in),
-          enable_quad_check(enable_quad_check_in),
-          min_quad_area_px(min_quad_area_px_in)
-    {
-    }
-
-    constexpr NetworkParams(double score_threshold_in,
-                            double min_confidence_in,
-                            bool enable_quad_check_in,
-                            double min_quad_area_px_in,
-                            const char* openvino_device_in,
-                            const char* openvino_performance_mode_in)
-        : score_threshold(score_threshold_in),
-          min_confidence(min_confidence_in),
-          enable_quad_check(enable_quad_check_in),
-          min_quad_area_px(min_quad_area_px_in),
-          openvino_device(openvino_device_in),
-          openvino_performance_mode(openvino_performance_mode_in)
-    {
-    }
-
-    constexpr NetworkParams(double score_threshold_in,
-                            double min_confidence_in,
-                            bool enable_quad_check_in,
-                            double min_quad_area_px_in,
-                            int input_width_in,
-                            int input_height_in)
-        : score_threshold(score_threshold_in),
-          min_confidence(min_confidence_in),
-          enable_quad_check(enable_quad_check_in),
-          min_quad_area_px(min_quad_area_px_in),
-          input_width(input_width_in),
-          input_height(input_height_in)
-    {
-    }
-
-    constexpr NetworkParams(double score_threshold_in,
-                            double min_confidence_in,
-                            bool enable_quad_check_in,
-                            double min_quad_area_px_in,
-                            int input_width_in,
-                            int input_height_in,
-                            const char* openvino_device_in,
-                            const char* openvino_performance_mode_in)
-        : score_threshold(score_threshold_in),
-          min_confidence(min_confidence_in),
-          enable_quad_check(enable_quad_check_in),
-          min_quad_area_px(min_quad_area_px_in),
-          input_width(input_width_in),
-          input_height(input_height_in),
-          openvino_device(openvino_device_in),
-          openvino_performance_mode(openvino_performance_mode_in)
-    {
-    }
-
     double score_threshold{0.1};         ///< 网络目标置信度门限。
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
-    int input_width{0};    ///< 兼容旧配置；实际尺寸由模型决定。
-    int input_height{0};   ///< 兼容旧配置；实际尺寸由模型决定。
     /// OpenVINO 编译设备；"AUTO_DETECT" 按 NPU、GPU、CPU 顺序自动选择。
     const char* openvino_device{"AUTO_DETECT"};
     /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。

@@ -97,7 +97,7 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         cfg_.depth_correction.max_abs_correction_m,
         cfg_.depth_correction.min_quad_height_px);
   }
-  network_.Configure(model_path, openvino_device, openvino_performance_mode, {});
+  network_.Configure(model_path, openvino_device, openvino_performance_mode);
 }
 
 /**

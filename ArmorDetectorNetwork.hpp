@@ -33,14 +33,11 @@ class OpenVinoArmorNetwork
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
-   * @param input_shape 保留用于兼容旧配置，实际输入尺寸由模型决定。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
   bool Configure(const char* model_path, const char* device_name,
-                 const char* performance_mode,
-                 const NetworkInputShape& input_shape)
+                 const char* performance_mode)
   {
-    (void)input_shape;
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
