@@ -129,6 +129,17 @@ class ArmorDetector : public LibXR::Application
     constexpr NetworkParams(double score_threshold_in,
                             double min_confidence_in,
                             bool enable_quad_check_in,
+                            double min_quad_area_px_in)
+        : score_threshold(score_threshold_in),
+          min_confidence(min_confidence_in),
+          enable_quad_check(enable_quad_check_in),
+          min_quad_area_px(min_quad_area_px_in)
+    {
+    }
+
+    constexpr NetworkParams(double score_threshold_in,
+                            double min_confidence_in,
+                            bool enable_quad_check_in,
                             double min_quad_area_px_in,
                             const char* openvino_device_in,
                             const char* openvino_performance_mode_in)
@@ -138,6 +149,21 @@ class ArmorDetector : public LibXR::Application
           min_quad_area_px(min_quad_area_px_in),
           openvino_device(openvino_device_in),
           openvino_performance_mode(openvino_performance_mode_in)
+    {
+    }
+
+    constexpr NetworkParams(double score_threshold_in,
+                            double min_confidence_in,
+                            bool enable_quad_check_in,
+                            double min_quad_area_px_in,
+                            int input_width_in,
+                            int input_height_in)
+        : score_threshold(score_threshold_in),
+          min_confidence(min_confidence_in),
+          enable_quad_check(enable_quad_check_in),
+          min_quad_area_px(min_quad_area_px_in),
+          input_width(input_width_in),
+          input_height(input_height_in)
     {
     }
 
