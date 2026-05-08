@@ -26,11 +26,8 @@
 
 默认模型文件:
 
-- `model/armor_keypoint_grid512x384_bgr.xml`
-- `model/armor_keypoint_grid512x384_bgr.bin`
-
-其他模型文件仅保留用于本地回退和对照评估。需要接入其他推理后端时使用
-对应 `.onnx` 文件。
+- `model/armor_keypoint_bgr.xml`
+- `model/armor_keypoint_bgr.bin`
 
 ## 结果内容
 
@@ -85,4 +82,4 @@ CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 - 原始视频、同步数据和回放包落盘由相机/同步模块负责，不放在 detector 里。
 - 相机参数来自模板参数 `Info`，必须与实际图像尺寸、编码、内参和畸变参数一致。
 - 相机帧可以是实际采集尺寸；处理前按模型要求缩放。decoder 按输出网格
-  解码，再按模型坐标偏移和缩放比例映射回相机图像。
+  解码，再映射回相机图像。

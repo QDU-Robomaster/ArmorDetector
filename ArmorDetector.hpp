@@ -36,15 +36,15 @@ constructor_args:
   sync: '@camera_frame_sync'
 template_args:
   - Info:
-      width: 1280
-      height: 720
-      step: 3840
+      width: 800
+      height: 600
+      step: 2400
       encoding: CameraTypes::Encoding::BGR8
-      camera_matrix: [800.0, 0.0, 640.0, 0.0, 800.0, 360.0, 0.0, 0.0, 1.0]
+      camera_matrix: [600.0, 0.0, 400.0, 0.0, 600.0, 300.0, 0.0, 0.0, 1.0]
       distortion_model: CameraTypes::DistortionModel::PLUMB_BOB
       distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
       rectification_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-      projection_matrix: [800.0, 0.0, 640.0, 0.0, 0.0, 800.0, 360.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+      projection_matrix: [600.0, 0.0, 400.0, 0.0, 0.0, 600.0, 300.0, 0.0, 0.0, 0.0, 1.0, 0.0]
 required_hardware: []
 depends:
   - qdu-future/CameraFrameSync
@@ -277,7 +277,7 @@ class ArmorDetector : public LibXR::Application
    * @brief 构建网络输入图像并记录输出网格到源图像坐标的映射。
    * @param bgr_img 原始 BGR 图像。
    * @param mapping 输出坐标映射。
-   * @return 网络输入尺寸的 BGR8 图像。
+   * @return 网络张量宽高对应的 BGR8 图像。
    */
   cv::Mat BuildNetworkInput(const cv::Mat& bgr_img,
                             detail::NetworkInputMapping& mapping) const;

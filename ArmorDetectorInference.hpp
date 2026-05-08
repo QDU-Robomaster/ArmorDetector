@@ -52,14 +52,14 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
 }
 
 /**
- * @brief 将原始图像拉伸成模型要求的输入图像。
+ * @brief 将原始图像拉伸成网络张量图像。
  *
  * mapping 描述当前输出网格坐标如何还原到原始图像坐标。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param bgr_img 原始 BGR 图像。
  * @param mapping 输出的坐标还原映射。
- * @return 模型输入尺寸 BGR8 图像；输入空图时返回空 Mat。
+ * @return 网络张量 BGR8 图像；输入空图时返回空 Mat。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(

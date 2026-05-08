@@ -27,7 +27,7 @@ constexpr int direct_keypoint_grid_height = 384;
  * @brief detector 模型日志名称。
  */
 inline constexpr const char* detector_model_name =
-    "direct_keypoint_grid512x384";
+    "direct_keypoint_dense_grid";
 
 /**
  * @brief dense-grid keypoint detector 的输出候选数量。

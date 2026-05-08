@@ -129,13 +129,13 @@ class OpenVinoArmorNetwork
   }
 
   /**
-   * @brief 当前模型输入尺寸。
+   * @brief 当前网络张量宽高。
    * @return 模型输入宽高。
    */
   [[nodiscard]] NetworkInputShape InputShape() const { return input_shape_; }
 
   /**
-   * @brief 对一帧已经 resize 到模型输入尺寸的 BGR 图像执行推理。
+   * @brief 对一帧已经 resize 到网络张量宽高的 BGR 图像执行推理。
    * @param input NHWC BGR8 输入图像。
    * @param output 输出矩阵视图，行是候选，列是 keypoint/score/class 字段。
    * @return 推理成功且输出非空时返回 true。
@@ -209,7 +209,7 @@ class OpenVinoArmorNetwork
   }
 
   /**
-   * @brief 从 OpenVINO 模型读取固定 NCHW 输入尺寸。
+   * @brief 从 OpenVINO 模型读取固定 NCHW 张量宽高。
    * @param model 已加载模型。
    * @return 可解析时返回宽高；否则返回 0 尺寸。
    */
@@ -398,7 +398,7 @@ class OpenVinoArmorNetwork
   std::string device_name_{"CPU"};                                   ///< OpenVINO 编译设备。
   std::string performance_mode_name_{"LATENCY"};                     ///< OpenVINO 性能模式。
   bool model_ready_{false};                                         ///< 模型是否可用。
-  NetworkInputShape input_shape_{};                                 ///< 当前模型输入尺寸。
+  NetworkInputShape input_shape_{};                                 ///< 当前网络张量宽高。
   ov::Core ov_core_{};                                               ///< OpenVINO runtime core。
   ov::CompiledModel compiled_model_{};                               ///< 已编译的 OpenVINO 模型。
   ov::InferRequest infer_request_{};                                 ///< 复用的同步推理请求。
