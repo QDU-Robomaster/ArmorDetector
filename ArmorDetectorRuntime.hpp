@@ -85,13 +85,10 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
     openvino_performance_mode = "LATENCY";
   }
 
-  const detail::NetworkInputShape input_shape{
-      cfg_.network.input_width, cfg_.network.input_height};
-
   XR_LOG_INFO(
-      "ArmorDetector model=%s input=%dx%d device=%s mode=%s path=%s",
-      detail::detector_model_name, input_shape.width, input_shape.height,
-      openvino_device, openvino_performance_mode, model_path);
+      "ArmorDetector model=%s device=%s mode=%s path=%s",
+      detail::detector_model_name, openvino_device, openvino_performance_mode,
+      model_path);
   if (cfg_.depth_correction.enabled)
   {
     XR_LOG_INFO(
@@ -100,8 +97,7 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         cfg_.depth_correction.max_abs_correction_m,
         cfg_.depth_correction.min_quad_height_px);
   }
-  network_.Configure(model_path, openvino_device, openvino_performance_mode,
-                     input_shape);
+  network_.Configure(model_path, openvino_device, openvino_performance_mode, {});
 }
 
 /**

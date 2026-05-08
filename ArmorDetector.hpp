@@ -11,8 +11,6 @@ constructor_args:
       min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
-      input_width: 512
-      input_height: 384
       openvino_device: "AUTO_DETECT"
       openvino_performance_mode: "LATENCY"
     referee_auto_detect_color: false
@@ -130,8 +128,8 @@ class ArmorDetector : public LibXR::Application
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
-    int input_width{detail::direct_keypoint_input_width};   ///< OpenVINO 模型输入宽度。
-    int input_height{detail::direct_keypoint_input_height}; ///< OpenVINO 模型输入高度。
+    int input_width{0};    ///< 兼容旧配置；实际尺寸由模型决定。
+    int input_height{0};   ///< 兼容旧配置；实际尺寸由模型决定。
     /// OpenVINO 编译设备；"AUTO_DETECT" 按 NPU、GPU、CPU 顺序自动选择。
     const char* openvino_device{"AUTO_DETECT"};
     /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
@@ -278,7 +276,7 @@ class ArmorDetector : public LibXR::Application
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img);
 
   /**
-   * @brief 构建网络输入图像并记录输入坐标到源图像坐标的映射。
+   * @brief 构建网络输入图像并记录输出网格到源图像坐标的映射。
    * @param bgr_img 原始 BGR 图像。
    * @param mapping 输出坐标映射。
    * @return 网络输入尺寸的 BGR8 图像。

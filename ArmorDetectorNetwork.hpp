@@ -8,6 +8,7 @@
 #include <cmath>
 #include <exception>
 #include <initializer_list>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -32,24 +33,18 @@ class OpenVinoArmorNetwork
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
-   * @param input_shape 模型输入宽高。
+   * @param input_shape 保留用于兼容旧配置，实际输入尺寸由模型决定。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
   bool Configure(const char* model_path, const char* device_name,
                  const char* performance_mode,
                  const NetworkInputShape& input_shape)
   {
+    (void)input_shape;
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
     output_tensor_ = ov::Tensor();
-    input_shape_ = input_shape;
-    if (!IsValidNetworkInputShape(input_shape_))
-    {
-      XR_LOG_ERROR("ArmorDetector invalid network input shape %dx%d; expect positive multiples of 32",
-                   input_shape_.width, input_shape_.height);
-      return false;
-    }
 
     requested_device_name_ = NormalizeDeviceName(device_name);
     available_device_names_ = QueryAvailableDeviceNames();
@@ -60,9 +55,14 @@ class OpenVinoArmorNetwork
     {
       LogDeviceSelection();
       auto model = ov_core_.read_model(model_path);
-      const auto input_name = model->input().get_any_name();
-      model->reshape({{input_name, ov::PartialShape{1, 3, input_shape_.height,
-                                                    input_shape_.width}}});
+      input_shape_ = ModelInputShape(model);
+      if (!IsValidNetworkInputShape(input_shape_))
+      {
+        XR_LOG_ERROR(
+            "ArmorDetector cannot resolve model input shape");
+        return false;
+      }
+
       ov::preprocess::PrePostProcessor post_processor(model);
       auto& input = post_processor.input();
 
@@ -133,7 +133,7 @@ class OpenVinoArmorNetwork
 
   /**
    * @brief 当前模型输入尺寸。
-   * @return 输入宽高。
+   * @return 模型输入宽高。
    */
   [[nodiscard]] NetworkInputShape InputShape() const { return input_shape_; }
 
@@ -173,14 +173,16 @@ class OpenVinoArmorNetwork
       output = cv::Mat(static_cast<int>(output_shape[1]),
                        static_cast<int>(output_shape[2]), CV_32F,
                        output_tensor_.data<float>());
-      const auto expected_candidate_count = DirectKeypointCandidateCount(input_shape_);
+      const auto expected_candidate_count =
+          DirectKeypointCandidateCount(DirectKeypointGridShape());
       if (expected_candidate_count <= 0 ||
           output.rows != direct_keypoint_output_width ||
           output.cols != expected_candidate_count)
       {
         XR_LOG_ERROR(
-            "ArmorDetector network output shape invalid: rows=%d cols=%d expected=21x%d",
-            output.rows, output.cols, expected_candidate_count);
+            "ArmorDetector network output shape invalid: rows=%d cols=%d expected=21x%d grid=%dx%d",
+            output.rows, output.cols, expected_candidate_count,
+            direct_keypoint_grid_width, direct_keypoint_grid_height);
         output.release();
         return false;
       }
@@ -207,6 +209,23 @@ class OpenVinoArmorNetwork
       return "AUTO_DETECT";
     }
     return device_name;
+  }
+
+  /**
+   * @brief 从 OpenVINO 模型读取固定 NCHW 输入尺寸。
+   * @param model 已加载模型。
+   * @return 可解析时返回宽高；否则返回 0 尺寸。
+   */
+  static NetworkInputShape ModelInputShape(const std::shared_ptr<ov::Model>& model)
+  {
+    const auto shape = model->input().get_partial_shape();
+    if (shape.rank().is_dynamic() || shape.size() != 4U ||
+        shape[2].is_dynamic() || shape[3].is_dynamic())
+    {
+      return {};
+    }
+    return {static_cast<int>(shape[3].get_length()),
+            static_cast<int>(shape[2].get_length())};
   }
 
   /**
@@ -382,7 +401,7 @@ class OpenVinoArmorNetwork
   std::string device_name_{"CPU"};                                   ///< OpenVINO 编译设备。
   std::string performance_mode_name_{"LATENCY"};                     ///< OpenVINO 性能模式。
   bool model_ready_{false};                                         ///< 模型是否可用。
-  NetworkInputShape input_shape_{};                                 ///< 当前模型输入宽高。
+  NetworkInputShape input_shape_{};                                 ///< 当前模型输入尺寸。
   ov::Core ov_core_{};                                               ///< OpenVINO runtime core。
   ov::CompiledModel compiled_model_{};                               ///< 已编译的 OpenVINO 模型。
   ov::InferRequest infer_request_{};                                 ///< 复用的同步推理请求。

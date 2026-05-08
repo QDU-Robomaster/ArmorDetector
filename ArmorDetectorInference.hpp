@@ -52,14 +52,14 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
 }
 
 /**
- * @brief 将原始图像拉伸成 dense-grid 模型输入。
+ * @brief 将原始图像拉伸成模型要求的输入图像。
  *
- * mapping 描述当前模型输入坐标如何还原到原始图像坐标。
+ * mapping 描述当前输出网格坐标如何还原到原始图像坐标。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param bgr_img 原始 BGR 图像。
  * @param mapping 输出的坐标还原映射。
- * @return 网络输入尺寸 BGR8 图像；输入空图时返回空 Mat。
+ * @return 模型输入尺寸 BGR8 图像；输入空图时返回空 Mat。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
@@ -75,6 +75,10 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
       static_cast<double>(bgr_img.cols) / std::max(1, input_shape.width);
   mapping.y_scale =
       static_cast<double>(bgr_img.rows) / std::max(1, input_shape.height);
+  const auto grid_offset =
+      detail::NetworkGridOffset(input_shape, detail::DirectKeypointGridShape());
+  mapping.x_offset = grid_offset.x;
+  mapping.y_offset = grid_offset.y;
 
   cv::Mat input;
   cv::resize(bgr_img, input, cv::Size(input_shape.width, input_shape.height));
@@ -101,14 +105,16 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   const ArmorColor target_color = CurrentTargetColor();
 
   const auto input_shape = network_.InputShape();
-  const detail::DirectKeypointOutputView output_view(output, input_shape);
+  const auto grid_shape = detail::DirectKeypointGridShape();
+  const detail::DirectKeypointOutputView output_view(output, grid_shape);
   if (!output_view.Valid())
   {
     XR_LOG_ERROR(
-        "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=21x%d input=%dx%d",
+        "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=21x%d input=%dx%d grid=%dx%d",
         output.rows, output.cols, output.type(),
-        detail::DirectKeypointCandidateCount(input_shape),
-        input_shape.width, input_shape.height);
+        detail::DirectKeypointCandidateCount(grid_shape),
+        input_shape.width, input_shape.height, grid_shape.width,
+        grid_shape.height);
     ++counters_.discarded_count;
     return {};
   }
@@ -242,11 +248,11 @@ ArmorDetector<CameraInfoV>::SelectDetectionsAfterOverlapSuppression(
 /**
  * @brief 解码 dense-grid keypoint 模型的单行输出。
  *
- * dense-grid 模型使用拉伸输入；每行先由网格中心和 stride 还原到模型输入坐标，
- * 再统一成 detector/PnP 使用的左上、右上、右下、左下顺序。
+ * dense-grid 模型使用拉伸输入；每行先由网格中心和 stride 还原到输出网格
+ * 坐标，再由 mapping 还原到源图像坐标。
  *
  * @tparam CameraInfoV 编译期相机参数。
- * @param mapping 网络输入到 detector 图像的坐标映射。
+ * @param mapping 输出网格到 detector 图像的坐标映射。
  * @param output 网络输出矩阵。
  * @param row 待解码输出行。
  * @return 通过置信度和可选四边形门限时返回网络检测单元。
@@ -277,7 +283,8 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
       output, row, detail::DirectKeypointOutputLayout::number_begin,
       detail::DirectKeypointOutputLayout::number_end);
 
-  const auto cell = detail::DirectKeypointGridCellForRow(network_.InputShape(), row);
+  const auto cell =
+      detail::DirectKeypointGridCellForRow(detail::DirectKeypointGridShape(), row);
   std::array<cv::Point2f, 4> declared_points{};
   for (int point_index = 0; point_index < 4; ++point_index)
   {

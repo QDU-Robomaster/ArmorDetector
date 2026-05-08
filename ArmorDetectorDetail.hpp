@@ -14,19 +14,20 @@ namespace armor_detector_detail
 {
 
 /**
- * @brief dense-grid keypoint detector 输入宽度。
+ * @brief dense-grid keypoint detector 输出网格宽度。
  */
-constexpr int direct_keypoint_input_width = 512;
+constexpr int direct_keypoint_grid_width = 512;
 
 /**
- * @brief dense-grid keypoint detector 输入高度。
+ * @brief dense-grid keypoint detector 输出网格高度。
  */
-constexpr int direct_keypoint_input_height = 384;
+constexpr int direct_keypoint_grid_height = 384;
 
 /**
  * @brief detector 模型日志名称。
  */
-inline constexpr const char* detector_model_name = "direct_keypoint_512x384";
+inline constexpr const char* detector_model_name =
+    "direct_keypoint_grid512x384";
 
 /**
  * @brief dense-grid keypoint detector 的输出候选数量。
@@ -54,16 +55,16 @@ constexpr uint32_t sync_frame_wait_timeout_ms = 100;
 constexpr uint32_t metrics_log_period = 30;
 
 /**
- * @brief detector 网络输入尺寸。
+ * @brief detector 网络张量尺寸。
  */
 struct NetworkInputShape
 {
-  int width{direct_keypoint_input_width};   ///< 输入宽度，单位 px。
-  int height{direct_keypoint_input_height}; ///< 输入高度，单位 px。
+  int width{0};   ///< 网络张量宽度，单位 px。
+  int height{0};  ///< 网络张量高度，单位 px。
 };
 
 /**
- * @brief 判断 dense-grid 模型输入尺寸是否满足当前 decoder 假设。
+ * @brief 判断 dense-grid 网络张量尺寸是否满足当前 decoder 假设。
  * @param shape 输入宽高。
  * @return 宽高均为正且是最大检测 stride 32 的整数倍时返回 true。
  */
@@ -74,7 +75,7 @@ inline bool IsValidNetworkInputShape(const NetworkInputShape& shape)
 }
 
 /**
- * @brief 计算 dense-grid keypoint detector 在给定输入尺寸下的候选数量。
+ * @brief 计算 dense-grid keypoint detector 在给定网格尺寸下的候选数量。
  *
  * 当前模型有 stride 8/16/32 三个检测层，每个网格单元一个候选。
  *
@@ -94,25 +95,56 @@ inline int DirectKeypointCandidateCount(const NetworkInputShape& shape)
 }
 
 /**
- * @brief 网络输入坐标到原始图像坐标的映射。
+ * @brief 输出网格坐标到原始图像坐标的映射。
  */
 struct NetworkInputMapping
 {
-  double x_scale{1.0}; ///< 网络 x 坐标还原到源图像的比例。
-  double y_scale{1.0}; ///< 网络 y 坐标还原到源图像的比例。
+  double x_scale{1.0}; ///< 网络张量 x 坐标还原到源图像的比例。
+  double y_scale{1.0}; ///< 网络张量 y 坐标还原到源图像的比例。
+  int x_offset{0};     ///< 输出网格到网络张量的 x 偏移。
+  int y_offset{0};     ///< 输出网格到网络张量的 y 偏移。
 
   /**
-   * @brief 将模型输入平面上的点还原到原始图像平面。
-   * @param x 模型输入坐标 x。
-   * @param y 模型输入坐标 y。
+   * @brief 将输出网格上的点还原到原始图像平面。
+   * @param x 输出网格坐标 x。
+   * @param y 输出网格坐标 y。
    * @return 源图像像素坐标。
    */
   [[nodiscard]] cv::Point2f MapToSource(float x, float y) const
   {
-    return {static_cast<float>(static_cast<double>(x) * x_scale),
-            static_cast<float>(static_cast<double>(y) * y_scale)};
+    return {static_cast<float>(
+                static_cast<double>(x + static_cast<float>(x_offset)) * x_scale),
+            static_cast<float>(
+                static_cast<double>(y + static_cast<float>(y_offset)) * y_scale)};
   }
 };
+
+/**
+ * @brief 当前模型输出网格尺寸。
+ * @return 输出网格宽高。
+ */
+inline NetworkInputShape DirectKeypointGridShape()
+{
+  return {direct_keypoint_grid_width, direct_keypoint_grid_height};
+}
+
+/**
+ * @brief 计算输出网格到网络张量坐标的偏移。
+ * @param input_shape 当前网络张量尺寸。
+ * @param grid_shape 当前输出网格尺寸。
+ * @return x/y 方向偏移；尺寸不匹配时按 0 兜底。
+ */
+inline cv::Point NetworkGridOffset(const NetworkInputShape& input_shape,
+                                   const NetworkInputShape& grid_shape)
+{
+  if (input_shape.width < grid_shape.width ||
+      input_shape.height < grid_shape.height)
+  {
+    return {};
+  }
+  return {(input_shape.width - grid_shape.width) / 2,
+          (input_shape.height - grid_shape.height) / 2};
+}
 
 /**
  * @brief dense-grid keypoint 输出的字段布局。
@@ -134,14 +166,14 @@ struct DirectKeypointOutputLayout
  */
 struct DirectKeypointGridCell
 {
-  int center_x{0}; ///< 网格中心 x，单位为模型输入像素。
-  int center_y{0}; ///< 网格中心 y，单位为模型输入像素。
+  int center_x{0}; ///< 网格中心 x，单位为输出网格像素。
+  int center_y{0}; ///< 网格中心 y，单位为输出网格像素。
   int stride{8};   ///< 当前检测层 stride。
 };
 
 /**
  * @brief 将 dense-grid 输出行号转换为网格中心和 stride。
- * @param shape 当前网络输入尺寸。
+ * @param shape 当前输出网格尺寸。
  * @param row 输出行号，范围为 [0, DirectKeypointCandidateCount(shape))。
  * @return 对应网格单元；越界时返回最后一层的兜底单元。
  */
@@ -177,15 +209,15 @@ inline DirectKeypointGridCell DirectKeypointGridCellForRow(
 /**
  * @brief dense-grid 模型输出矩阵的轻量视图。
  *
- * 当前模型输出为 `[21,N]`，行是字段，列是候选；N 由输入尺寸决定。
+ * 当前模型输出为 `[21,N]`，行是字段，列是候选；N 由输出网格尺寸决定。
  */
 class DirectKeypointOutputView
 {
  public:
   DirectKeypointOutputView(const cv::Mat& output,
-                           const NetworkInputShape& input_shape)
+                           const NetworkInputShape& grid_shape)
       : output_(output),
-        candidate_count_(DirectKeypointCandidateCount(input_shape))
+        candidate_count_(DirectKeypointCandidateCount(grid_shape))
   {
     if (output_.type() != CV_32F || output_.dims != 2)
     {
