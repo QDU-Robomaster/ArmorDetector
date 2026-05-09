@@ -104,8 +104,9 @@ inline constexpr bool ArmorNumberIsLarge(ArmorNumber number)
  */
 inline constexpr bool ArmorNumberIsSmall(ArmorNumber number)
 {
-  return number == ArmorNumber::TWO || number == ArmorNumber::GUARD ||
-         number == ArmorNumber::OUTPOST;
+  return number == ArmorNumber::TWO || number == ArmorNumber::THREE ||
+         number == ArmorNumber::FOUR || number == ArmorNumber::FIVE ||
+         number == ArmorNumber::OUTPOST || number == ArmorNumber::GUARD;
 }
 
 /**

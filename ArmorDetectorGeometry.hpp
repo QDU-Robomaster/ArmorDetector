@@ -24,6 +24,30 @@ bool ArmorDetector<CameraInfoV>::ValidateArmorType(const CandidateArmor& armor) 
 }
 
 /**
+ * @brief 根据编号先验或几何比例更新装甲板尺寸类型。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待更新候选。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+void ArmorDetector<CameraInfoV>::ApplyNumberTypePrior(
+    CandidateArmor& armor) const
+{
+  if (ArmorNumberIsLarge(armor.number))
+  {
+    armor.type = ArmorType::LARGE;
+  }
+  else if (ArmorNumberIsSmall(armor.number))
+  {
+    armor.type = ArmorType::SMALL;
+  }
+  else
+  {
+    armor.type = InferArmorType(armor);
+  }
+}
+
+/**
  * @brief 更新候选装甲板的几何比例。
  *
  * ratio 定义为左右竖边中心距除以左右竖边最大长度，用于无法从编号确定大小时的
@@ -50,14 +74,15 @@ void ArmorDetector<CameraInfoV>::UpdateGeometryMetrics(CandidateArmor& armor) co
 }
 
 /**
- * @brief 根据几何比例和编号先验推断装甲板尺寸类型。
+ * @brief 根据几何比例给出明确大小提示。
  *
  * @tparam CameraInfoV 编译期相机参数。
- * @param armor 待推断候选。
- * @return 推断出的尺寸类型。
+ * @param armor 待判断候选。
+ * @return ratio 明确时返回 LARGE/SMALL，灰区返回 INVALID。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
-ArmorType ArmorDetector<CameraInfoV>::InferArmorType(const CandidateArmor& armor) const
+ArmorType ArmorDetector<CameraInfoV>::GeometryTypeHint(
+    const CandidateArmor& armor) const
 {
   if (armor.ratio > 3.0)
   {
@@ -67,12 +92,63 @@ ArmorType ArmorDetector<CameraInfoV>::InferArmorType(const CandidateArmor& armor
   {
     return ArmorType::SMALL;
   }
+  return ArmorType::INVALID;
+}
+
+/**
+ * @brief 根据几何比例和编号先验推断装甲板尺寸类型。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param armor 待推断候选。
+ * @return 推断出的尺寸类型。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+ArmorType ArmorDetector<CameraInfoV>::InferArmorType(const CandidateArmor& armor) const
+{
+  const ArmorType geometry_type = GeometryTypeHint(armor);
+  if (geometry_type != ArmorType::INVALID)
+  {
+    return geometry_type;
+  }
 
   if (ArmorNumberIsLarge(armor.number))
   {
     return ArmorType::LARGE;
   }
   return ArmorType::SMALL;
+}
+
+/**
+ * @brief 判断 refine 编号是否与明确几何尺寸冲突。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param number 分类器输出编号。
+ * @param armor 当前候选。
+ * @return 未冲突时返回 true。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+bool ArmorDetector<CameraInfoV>::RefinedNumberCompatibleWithGeometry(
+    ArmorNumber number, const CandidateArmor& armor) const
+{
+  if (!cfg_.number_refine.enforce_type_compatibility)
+  {
+    return true;
+  }
+
+  const ArmorType geometry_type = GeometryTypeHint(armor);
+  if (geometry_type == ArmorType::INVALID)
+  {
+    return true;
+  }
+  if (ArmorNumberIsLarge(number))
+  {
+    return geometry_type == ArmorType::LARGE;
+  }
+  if (ArmorNumberIsSmall(number))
+  {
+    return geometry_type == ArmorType::SMALL;
+  }
+  return true;
 }
 
 /**

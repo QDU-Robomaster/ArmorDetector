@@ -48,7 +48,7 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
     return {};
   }
 
-  return DecodeOutput(input_mapping, output);
+  return DecodeOutput(raw_img, input_mapping, output);
 }
 
 /**
@@ -99,7 +99,8 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
 ArmorDetector<CameraInfoV>::DecodeOutput(
-    const detail::NetworkInputMapping& mapping, const cv::Mat& output)
+    const cv::Mat& raw_img, const detail::NetworkInputMapping& mapping,
+    const cv::Mat& output)
 {
   std::vector<NetworkDetection> detections;
   const ArmorColor target_color = CurrentTargetColor();
@@ -161,24 +162,15 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
     }
     ++counters_.semantic_kept_count;
 
-    if (ArmorNumberIsLarge(armor.number))
-    {
-      armor.type = ArmorType::LARGE;
-    }
-    else if (ArmorNumberIsSmall(armor.number))
-    {
-      armor.type = ArmorType::SMALL;
-    }
-    else
-    {
-      armor.type = InferArmorType(armor);
-    }
+    ApplyNumberTypePrior(armor);
     if (!ValidateArmorType(armor))
     {
       ++counters_.discarded_count;
       ++counters_.type_discard_count;
       continue;
     }
+
+    RefineNumberIfConfident(raw_img, armor);
 
     armors.emplace_back(std::move(armor));
   }
@@ -343,4 +335,49 @@ ArmorDetector<CameraInfoV>::BuildCandidateArmor(
   armor.center = detail::quad_center(armor.points);
   UpdateGeometryMetrics(armor);
   return armor;
+}
+
+/**
+ * @brief 使用 Fater MLP 对 detector 编号做置信度门控后的覆盖。
+ *
+ * @tparam CameraInfoV 编译期相机参数。
+ * @param bgr_img 当前源图像。
+ * @param armor 待 refine 候选。
+ * @return 成功覆盖编号时返回 true。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+bool ArmorDetector<CameraInfoV>::RefineNumberIfConfident(
+    const cv::Mat& bgr_img, CandidateArmor& armor)
+{
+  if (!cfg_.number_refine.enabled || !number_refiner_.Ready())
+  {
+    return false;
+  }
+  if (armor.confidence <
+      static_cast<float>(cfg_.number_refine.detector_min_confidence))
+  {
+    return false;
+  }
+
+  const auto prediction =
+      number_refiner_.Predict(bgr_img, armor.points, armor.type);
+  if (!prediction.valid ||
+      prediction.confidence <
+          static_cast<float>(cfg_.number_refine.classifier_min_confidence))
+  {
+    return false;
+  }
+  if (prediction.number == ArmorNumber::NEGATIVE ||
+      !ArmorNumberIsKnown(prediction.number))
+  {
+    return false;
+  }
+  if (!RefinedNumberCompatibleWithGeometry(prediction.number, armor))
+  {
+    return false;
+  }
+
+  armor.number = prediction.number;
+  ApplyNumberTypePrior(armor);
+  return true;
 }

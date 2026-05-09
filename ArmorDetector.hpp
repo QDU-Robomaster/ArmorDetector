@@ -33,6 +33,11 @@ constructor_args:
       coeffs: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
       max_abs_correction_m: 0.15
       min_quad_height_px: 1.0
+    number_refine:
+      enabled: true
+      detector_min_confidence: 0.5
+      classifier_min_confidence: 0.9
+      enforce_type_compatibility: true
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -81,10 +86,14 @@ depends:
 #include "ArmorDetectorPnPSolver.hpp"
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
+#include "ArmorDetectorNumberRefiner.hpp"
 #include "VisionPreview.hpp"
 
 #ifndef ARMOR_DETECTOR_MODEL_PATH
 #error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
+#endif
+#ifndef ARMOR_DETECTOR_NUMBER_MODEL_PATH
+#error "ARMOR_DETECTOR_NUMBER_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
 #endif
 
 /**
@@ -155,6 +164,21 @@ class ArmorDetector : public LibXR::Application
   };
 
   /**
+   * @brief 数字分类器后 refine 参数。
+   *
+   * 该阶段只在 detector 已经输出有效装甲板后运行。detector_min_confidence
+   * 控制哪些候选允许进入 refine；classifier_min_confidence 控制 MLP 输出是否
+   * 能覆盖 detector 编号。Fater MLP 的 negative 类只表示“不覆盖”，不会删除候选。
+   */
+  struct NumberRefineParams
+  {
+    bool enabled{true};                    ///< 是否启用 Fater MLP 数字后 refine。
+    double detector_min_confidence{0.5};   ///< detector 候选进入 refine 的最低置信度。
+    double classifier_min_confidence{0.9}; ///< MLP 覆盖 detector 编号的最低置信度。
+    bool enforce_type_compatibility{true}; ///< 几何尺寸明确冲突时不覆盖编号。
+  };
+
+  /**
    * @brief ArmorDetector 模块配置。
    */
   struct Config
@@ -166,6 +190,7 @@ class ArmorDetector : public LibXR::Application
     const char* referee_topic{"robot_game_ref"}; ///< 裁判系统摘要包主题名。
     VisionPreview::RuntimeParam preview{}; ///< 可选实时预览配置。
     DepthCorrectionParams depth_correction{}; ///< 可选 PnP 深度修正配置。
+    NumberRefineParams number_refine{}; ///< 可选 Fater MLP 数字后 refine 配置。
   };
 
   /**
@@ -289,7 +314,8 @@ class ArmorDetector : public LibXR::Application
    * @return 有效装甲板候选。
    */
   std::vector<CandidateArmor> DecodeOutput(
-      const detail::NetworkInputMapping& mapping, const cv::Mat& output);
+      const cv::Mat& raw_img, const detail::NetworkInputMapping& mapping,
+      const cv::Mat& output);
 
   /**
    * @brief 对已解码候选执行交叠抑制。
@@ -316,6 +342,36 @@ class ArmorDetector : public LibXR::Application
    * @return 内部装甲板候选。
    */
   CandidateArmor BuildCandidateArmor(const NetworkDetection& detection) const;
+
+  /**
+   * @brief 根据编号先验或几何比例更新装甲板尺寸类型。
+   * @param armor 待更新候选。
+   */
+  void ApplyNumberTypePrior(CandidateArmor& armor) const;
+
+  /**
+   * @brief 几何比例给出的明确大小提示。
+   * @param armor 待判断候选。
+   * @return ratio 明确时返回 LARGE/SMALL，处于灰区时返回 INVALID。
+   */
+  ArmorType GeometryTypeHint(const CandidateArmor& armor) const;
+
+  /**
+   * @brief 判断分类器输出是否与明确几何尺寸冲突。
+   * @param number 分类器输出编号。
+   * @param armor 当前候选。
+   * @return 未冲突时返回 true。
+   */
+  bool RefinedNumberCompatibleWithGeometry(ArmorNumber number,
+                                           const CandidateArmor& armor) const;
+
+  /**
+   * @brief 使用 Fater MLP 对候选编号做后 refine。
+   * @param bgr_img 当前源图像。
+   * @param armor 待 refine 候选。
+   * @return 成功覆盖编号时返回 true。
+   */
+  bool RefineNumberIfConfident(const cv::Mat& bgr_img, CandidateArmor& armor);
 
   /**
    * @brief 检查候选编号先验与尺寸类型是否冲突。
@@ -391,6 +447,7 @@ class ArmorDetector : public LibXR::Application
   std::thread sync_frame_thread_{};      ///< 后台同步帧消费线程。
   FrameCounters counters_{};             ///< 当前帧内部计数器。
   detail::OpenVinoArmorNetwork network_{}; ///< OpenVINO 网络封装。
+  detail::FaterMlpNumberRefiner number_refiner_{}; ///< CPU 数字分类后 refine。
 
   ArmorDetectionsPacket armors_packet_{}; ///< 复用的检测结果包。
   DetectionPacket armors_frame_packet_{}; ///< 复用的带源帧引用结果包。

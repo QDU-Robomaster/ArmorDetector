@@ -98,6 +98,20 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         cfg_.depth_correction.min_quad_height_px);
   }
   network_.Configure(model_path, openvino_device, openvino_performance_mode);
+
+  if (cfg_.number_refine.enabled)
+  {
+    XR_LOG_INFO(
+        "ArmorDetector number refine enabled detector_min=%.3f classifier_min=%.3f type_gate=%u",
+        cfg_.number_refine.detector_min_confidence,
+        cfg_.number_refine.classifier_min_confidence,
+        cfg_.number_refine.enforce_type_compatibility ? 1U : 0U);
+    number_refiner_.Configure(ARMOR_DETECTOR_NUMBER_MODEL_PATH);
+  }
+  else
+  {
+    number_refiner_.Reset();
+  }
 }
 
 /**
