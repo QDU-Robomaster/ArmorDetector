@@ -14,7 +14,7 @@ namespace armor_detector_detail
 {
 
 /**
- * @brief Detector model artifact selected by runtime config.
+ * @brief Detector model selected by runtime config.
  */
 enum class DetectorModelVariant : uint8_t
 {
@@ -41,7 +41,7 @@ enum class NetworkInputColor : uint8_t
 };
 
 /**
- * @brief Decoder contract selected from the loaded model artifact.
+ * @brief Decoder contract selected from the loaded model.
  */
 enum class NetworkOutputLayout : uint8_t
 {
@@ -61,22 +61,6 @@ constexpr int direct_keypoint_grid_width = 512;
 constexpr int direct_keypoint_grid_height = 384;
 
 /**
- * @brief detector 模型日志名称。
- */
-inline constexpr const char* detector_model_name =
-    "direct_keypoint_dense_grid";
-
-/**
- * @brief SHtech/SZU UINT8 model log name.
- */
-inline constexpr const char* szu_u8_model_name = "szu_u8_rgb_hwc_shtech22";
-
-/**
- * @brief dense-grid keypoint detector 的输出候选数量。
- */
-constexpr int direct_keypoint_candidate_count = 4032;
-
-/**
  * @brief dense-grid keypoint detector 的输出列数。
  */
 constexpr int direct_keypoint_output_width = 21;
@@ -89,13 +73,9 @@ constexpr int direct_keypoint_keep_topk = 128;
 /**
  * @brief SHtech/SZU 512x640 absolute-output model constants.
  */
-constexpr int shtech_input_width = 640;
-constexpr int shtech_input_height = 512;
 constexpr int shtech_candidate_count = 20160;
 constexpr int shtech_output_width = 22;
 constexpr double shtech_default_logit_threshold = 0.619;
-constexpr double shtech_default_confidence_threshold = 0.65;
-constexpr double shtech_default_nms_threshold = 0.45;
 constexpr double shtech_default_bbox_expand = 0.1;
 constexpr int shtech_default_max_detections = 128;
 
@@ -120,7 +100,7 @@ inline DetectorModelVariant ParseDetectorModelVariant(const char* text)
 }
 
 /**
- * @brief Stable name for logs and diagnostics.
+ * @brief Stable name for logs.
  * @param variant Model variant.
  * @return String literal model variant name.
  */
@@ -137,7 +117,7 @@ inline const char* DetectorModelVariantName(DetectorModelVariant variant)
 }
 
 /**
- * @brief Stable name for decoder logs and diagnostics.
+ * @brief Stable name for decoder logs.
  */
 inline const char* NetworkOutputLayoutName(NetworkOutputLayout layout)
 {
@@ -361,8 +341,9 @@ class DirectKeypointOutputView
 /**
  * @brief SHtech/SZU 20160x22 absolute detector output view.
  *
- * Most OpenVINO ONNX runs expose [1,20160,22]. The transposed 22x20160 form
- * is accepted as a defensive check because some dump tools normalize outputs.
+ * OpenVINO exposes [1,20160,22] as a 2D [20160,22] Mat in this wrapper. The
+ * transposed [22,20160] form is accepted to keep the view tolerant of output
+ * adapters that flatten dimensions differently.
  */
 class Shtech22OutputView
 {
@@ -833,7 +814,7 @@ inline ArmorNumber number_from_shtech_class_id(int class_id)
 }
 
 /**
- * @brief SHtech/SZU detector type rule used by the validated artifact matrix.
+ * @brief SHtech/SZU detector type rule derived from model class convention.
  */
 inline ArmorType shtech_type_from_number(ArmorNumber number)
 {

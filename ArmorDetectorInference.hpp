@@ -235,9 +235,8 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
 /**
  * @brief 执行 SHtech/SZU 候选 NMS。
  *
- * 该路径复现验证矩阵里的 OpenCV NMS contract：score threshold 使用
- * network.min_confidence，IoU threshold 使用 network.nms_threshold，然后按
- * confidence 降序截断 max_detections。
+ * score threshold 使用 network.min_confidence，IoU threshold 使用
+ * network.nms_threshold，然后按 confidence 降序截断 max_detections。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::vector<int> ArmorDetector<CameraInfoV>::SelectDetectionsAfterOpenCvNms(
@@ -416,10 +415,9 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
 /**
  * @brief 解码 SHtech/SZU 20160x22 absolute-output 模型的单行输出。
  *
- * 该 decoder 对齐 pretracker artifact matrix 中的 `szu_onnx13_u8_withpre_rgb_hwc`
- * contract：RGB HWC UINT8 输入、objectness raw logit、raw color 0/1 翻转、
- * 9-class SHtech tag 到 QDU enum 的映射、角点按模型原顺序 [0,3,2,1]
- * 转成 TL/TR/BR/BL。
+ * 该 decoder 使用 SZU U8 模型约定：RGB HWC UINT8 输入、objectness raw logit、
+ * raw color 0/1 映射到 QDU 颜色、raw color 2/3 直接拒绝、9-class SHtech tag
+ * 映射到 QDU enum，角点按模型原顺序 [0,3,2,1] 转成 TL/TR/BR/BL。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>

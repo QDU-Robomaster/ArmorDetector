@@ -75,7 +75,6 @@ depends:
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -94,44 +93,7 @@ depends:
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
 #include "ArmorDetectorNumberRefiner.hpp"
-
-#if __has_include("VisionPreview.hpp")
 #include "VisionPreview.hpp"
-#else
-class VisionPreview
-{
- public:
-  struct RuntimeParam
-  {
-    bool enabled{false};
-    std::string_view preview_window_name{"armor_detector_preview"};
-    double preview_scale{0.5};
-    int preview_wait_key_ms{1};
-    std::size_t queue_capacity{1};
-    std::string_view output_mode{"window"};
-    std::string_view web_bind_address{"0.0.0.0"};
-    uint16_t web_port{8080};
-    std::string_view web_stream_name{"armor_detector"};
-    double max_fps{30.0};
-  };
-
-  bool Start(const RuntimeParam& runtime)
-  {
-    if (runtime.enabled)
-    {
-      XR_LOG_WARN("VisionPreview module unavailable; detector preview disabled");
-    }
-    return false;
-  }
-  void Stop() {}
-  [[nodiscard]] bool Running() const { return false; }
-  template <typename DrawCallback>
-  bool Submit(const cv::Mat&, DrawCallback&&)
-  {
-    return false;
-  }
-};
-#endif
 
 #ifndef ARMOR_DETECTOR_MODEL_PATH
 #error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
@@ -188,7 +150,7 @@ class ArmorDetector : public LibXR::Application
     const char* openvino_device{"AUTO_DETECT"};
     /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
     const char* openvino_performance_mode{"LATENCY"};
-    /// 模型 artifact 选择；qdu_resize512_bgr 或 szu_u8_rgb_hwc。
+    /// 模型选择；qdu_resize512_bgr 或 szu_u8_rgb_hwc。
     const char* model_variant{"qdu_resize512_bgr"};
     /// SHtech/SZU objectness 原始 logit 门限；QDU 路径继续使用 score_threshold。
     double logit_threshold{0.619};

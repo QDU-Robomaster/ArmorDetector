@@ -249,7 +249,7 @@ class OpenVinoArmorNetwork
   /**
    * @brief 从 OpenVINO 模型读取固定张量宽高。
    * @param model 已加载模型。
-   * @param variant 模型 artifact 类型。
+   * @param variant 模型类型。
    * @return 可解析时返回宽高；否则返回 0 尺寸。
    */
   static NetworkInputShape ModelInputShape(
@@ -283,7 +283,7 @@ class OpenVinoArmorNetwork
   }
 
   /**
-   * @brief Resolve model output decoder layout from selected artifact.
+   * @brief Resolve model output decoder layout from selected model.
    */
   static NetworkOutputLayout ResolveOutputLayout(
       const std::shared_ptr<ov::Model>& model, DetectorModelVariant variant)
