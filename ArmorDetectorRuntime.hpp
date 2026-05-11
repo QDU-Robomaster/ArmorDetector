@@ -338,13 +338,29 @@ void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
       bgr_img,
       [detections, metrics](cv::Mat& canvas)
       {
+        const auto preview_color_for = [](ArmorColor color) -> cv::Scalar
+        {
+          if (color == ArmorColor::RED)
+          {
+            return cv::Scalar(0, 0, 255);
+          }
+          if (color == ArmorColor::BLUE)
+          {
+            return cv::Scalar(255, 80, 0);
+          }
+          return cv::Scalar(0, 220, 255);
+        };
+        const auto number_name_for = [](ArmorNumber number) -> std::string
+        {
+          const auto index = static_cast<std::size_t>(number);
+          return index < ARMOR_NUMBER_NAMES.size()
+                     ? std::string(ARMOR_NUMBER_NAMES[index])
+                     : std::string("unknown");
+        };
+
         for (const auto& armor : detections.results)
         {
-          const cv::Scalar color =
-              armor.color == ArmorColor::RED
-                  ? cv::Scalar(0, 0, 255)
-                  : (armor.color == ArmorColor::BLUE ? cv::Scalar(255, 80, 0)
-                                                     : cv::Scalar(0, 220, 255));
+          const cv::Scalar color = preview_color_for(armor.color);
           for (std::size_t i = 0; i < armor.points.size(); ++i)
           {
             cv::line(canvas, armor.points[i],
@@ -355,13 +371,8 @@ void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
           cv::circle(canvas, armor.center, 4, cv::Scalar(0, 255, 0), -1,
                      cv::LINE_AA);
 
-          const auto number_index = static_cast<std::size_t>(armor.number);
-          const std::string number_name =
-              number_index < ARMOR_NUMBER_NAMES.size()
-                  ? std::string(ARMOR_NUMBER_NAMES[number_index])
-                  : std::string("unknown");
           const std::string label =
-              number_name + " " +
+              number_name_for(armor.number) + " " +
               std::to_string(static_cast<int>(armor.confidence * 100.0F)) +
               "% pnp=" + (armor.pnp_valid ? "1" : "0");
           const cv::Point text_origin(
