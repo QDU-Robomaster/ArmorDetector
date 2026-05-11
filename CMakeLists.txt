@@ -31,7 +31,7 @@ target_link_libraries(${_DEPS_TARGET} INTERFACE
 )
 
 set(ARMOR_DETECTOR_MODEL_FILE
-  "${CMAKE_CURRENT_LIST_DIR}/model/armor_keypoint_bgr.xml"
+  "${CMAKE_CURRENT_LIST_DIR}/model/armor_detector_640x512.onnx"
 )
 if(NOT EXISTS "${ARMOR_DETECTOR_MODEL_FILE}")
   message(FATAL_ERROR "ArmorDetector model file not found: ${ARMOR_DETECTOR_MODEL_FILE}")

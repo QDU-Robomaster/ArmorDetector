@@ -14,35 +14,39 @@ namespace armor_detector_detail
 {
 
 /**
- * @brief dense-grid keypoint detector 输出网格宽度。
+ * @brief 当前 detector 模型输入宽度，单位 px。
  */
-constexpr int direct_keypoint_grid_width = 512;
+constexpr int model_input_width = 640;
 
 /**
- * @brief dense-grid keypoint detector 输出网格高度。
+ * @brief 当前 detector 模型输入高度，单位 px。
  */
-constexpr int direct_keypoint_grid_height = 384;
+constexpr int model_input_height = 512;
 
 /**
- * @brief detector 模型日志名称。
+ * @brief 当前 detector 输出候选数量。
  */
-inline constexpr const char* detector_model_name =
-    "direct_keypoint_dense_grid";
+constexpr int model_candidate_count = 20160;
 
 /**
- * @brief dense-grid keypoint detector 的输出候选数量。
+ * @brief 当前 detector 单候选字段数量。
  */
-constexpr int direct_keypoint_candidate_count = 4032;
+constexpr int model_output_width = 22;
 
 /**
- * @brief dense-grid keypoint detector 的输出列数。
+ * @brief 当前 detector objectness 原始 logit 默认门限。
  */
-constexpr int direct_keypoint_output_width = 21;
+constexpr double default_logit_threshold = 0.619;
 
 /**
- * @brief dense-grid keypoint detector 置信度排序后参与交叠抑制的最大候选数。
+ * @brief NMS 使用的 bbox 扩张比例默认值。
  */
-constexpr int direct_keypoint_keep_topk = 128;
+constexpr double default_bbox_expand = 0.1;
+
+/**
+ * @brief NMS 后最多保留候选数量默认值。
+ */
+constexpr int default_max_detections = 128;
 
 /**
  * @brief 同步帧 worker 单次等待超时，单位 ms。
@@ -64,170 +68,64 @@ struct NetworkInputShape
 };
 
 /**
- * @brief 判断 dense-grid 网络张量尺寸是否满足当前 decoder 假设。
+ * @brief 判断网络张量尺寸是否满足当前 detector 模型约定。
  * @param shape 输入宽高。
- * @return 宽高均为正且是最大检测 stride 32 的整数倍时返回 true。
+ * @return 宽高等于模型固定输入尺寸时返回 true。
  */
 inline bool IsValidNetworkInputShape(const NetworkInputShape& shape)
 {
-  return shape.width > 0 && shape.height > 0 &&
-         shape.width % 32 == 0 && shape.height % 32 == 0;
+  return shape.width == model_input_width && shape.height == model_input_height;
 }
 
 /**
- * @brief 计算 dense-grid keypoint detector 在给定网格尺寸下的候选数量。
- *
- * 当前模型有 stride 8/16/32 三个检测层，每个网格单元一个候选。
- *
- * @param shape 输入宽高。
- * @return 输出候选数量；尺寸非法时返回 0。
- */
-inline int DirectKeypointCandidateCount(const NetworkInputShape& shape)
-{
-  if (!IsValidNetworkInputShape(shape))
-  {
-    return 0;
-  }
-
-  return (shape.width / 8) * (shape.height / 8) +
-         (shape.width / 16) * (shape.height / 16) +
-         (shape.width / 32) * (shape.height / 32);
-}
-
-/**
- * @brief 输出网格坐标到原始图像坐标的映射。
+ * @brief 网络输入坐标到原始图像坐标的映射。
  */
 struct NetworkInputMapping
 {
   double x_scale{1.0}; ///< 网络张量 x 坐标还原到源图像的比例。
   double y_scale{1.0}; ///< 网络张量 y 坐标还原到源图像的比例。
-  int x_offset{0};     ///< 输出网格到网络张量的 x 偏移。
-  int y_offset{0};     ///< 输出网格到网络张量的 y 偏移。
 
   /**
-   * @brief 将输出网格上的点还原到原始图像平面。
-   * @param x 输出网格坐标 x。
-   * @param y 输出网格坐标 y。
+   * @brief 将网络张量上的点还原到原始图像平面。
+   * @param x 网络张量坐标 x。
+   * @param y 网络张量坐标 y。
    * @return 源图像像素坐标。
    */
   [[nodiscard]] cv::Point2f MapToSource(float x, float y) const
   {
-    return {static_cast<float>(
-                static_cast<double>(x + static_cast<float>(x_offset)) * x_scale),
-            static_cast<float>(
-                static_cast<double>(y + static_cast<float>(y_offset)) * y_scale)};
+    return {static_cast<float>(static_cast<double>(x) * x_scale),
+            static_cast<float>(static_cast<double>(y) * y_scale)};
   }
 };
 
 /**
- * @brief 当前模型输出网格尺寸。
- * @return 输出网格宽高。
- */
-inline NetworkInputShape DirectKeypointGridShape()
-{
-  return {direct_keypoint_grid_width, direct_keypoint_grid_height};
-}
-
-/**
- * @brief 计算输出网格到网络张量坐标的偏移。
- * @param input_shape 当前网络张量尺寸。
- * @param grid_shape 当前输出网格尺寸。
- * @return x/y 方向偏移；尺寸不匹配时按 0 兜底。
- */
-inline cv::Point NetworkGridOffset(const NetworkInputShape& input_shape,
-                                   const NetworkInputShape& grid_shape)
-{
-  if (input_shape.width < grid_shape.width ||
-      input_shape.height < grid_shape.height)
-  {
-    return {};
-  }
-  return {(input_shape.width - grid_shape.width) / 2,
-          (input_shape.height - grid_shape.height) / 2};
-}
-
-/**
- * @brief dense-grid keypoint 输出的字段布局。
- */
-struct DirectKeypointOutputLayout
-{
-  static constexpr int point_begin = 0;       ///< 角点偏移起始列。
-  static constexpr int objectness_index = 8;  ///< 目标置信度列。
-  static constexpr int number_begin = 9;      ///< 编号分类起始列，闭区间。
-  static constexpr int number_end = 17;       ///< 编号分类结束列，开区间。
-  static constexpr int color_begin = 17;      ///< 颜色分类起始列，闭区间。
-  static constexpr int color_end = 19;        ///< 颜色分类结束列，开区间。
-  static constexpr int size_begin = 19;       ///< 尺寸分类起始列，闭区间。
-  static constexpr int size_end = 21;         ///< 尺寸分类结束列，开区间。
-};
-
-/**
- * @brief dense-grid 输出行对应的网格单元。
- */
-struct DirectKeypointGridCell
-{
-  int center_x{0}; ///< 网格中心 x，单位为输出网格像素。
-  int center_y{0}; ///< 网格中心 y，单位为输出网格像素。
-  int stride{8};   ///< 当前检测层 stride。
-};
-
-/**
- * @brief 将 dense-grid 输出行号转换为网格中心和 stride。
- * @param shape 当前输出网格尺寸。
- * @param row 输出行号，范围为 [0, DirectKeypointCandidateCount(shape))。
- * @return 对应网格单元；越界时返回最后一层的兜底单元。
- */
-inline DirectKeypointGridCell DirectKeypointGridCellForRow(
-    const NetworkInputShape& shape, int row)
-{
-  if (row < 0 || !IsValidNetworkInputShape(shape))
-  {
-    return {};
-  }
-
-  const int stride8_cols = shape.width / 8;
-  const int stride8_count = stride8_cols * (shape.height / 8);
-  const int stride16_cols = shape.width / 16;
-  const int stride16_count = stride16_cols * (shape.height / 16);
-
-  if (row < stride8_count)
-  {
-    return {(row % stride8_cols) * 8, (row / stride8_cols) * 8, 8};
-  }
-
-  row -= stride8_count;
-  if (row < stride16_count)
-  {
-    return {(row % stride16_cols) * 16, (row / stride16_cols) * 16, 16};
-  }
-
-  row -= stride16_count;
-  const int stride32_cols = shape.width / 32;
-  return {(row % stride32_cols) * 32, (row / stride32_cols) * 32, 32};
-}
-
-/**
- * @brief dense-grid 模型输出矩阵的轻量视图。
+ * @brief 当前 detector 20160x22 输出矩阵视图。
  *
- * 当前模型输出为 `[21,N]`，行是字段，列是候选；N 由输出网格尺寸决定。
+ * OpenVINO exposes [1,20160,22] as a 2D [20160,22] Mat in this wrapper. The
+ * transposed [22,20160] form is accepted to keep the view tolerant of output
+ * adapters that flatten dimensions differently.
  */
-class DirectKeypointOutputView
+class ModelOutputView
 {
  public:
-  DirectKeypointOutputView(const cv::Mat& output,
-                           const NetworkInputShape& grid_shape)
-      : output_(output),
-        candidate_count_(DirectKeypointCandidateCount(grid_shape))
+  explicit ModelOutputView(const cv::Mat& output) : output_(output)
   {
     if (output_.type() != CV_32F || output_.dims != 2)
     {
       return;
     }
-
-    if (output_.rows == direct_keypoint_output_width &&
-        output_.cols == candidate_count_)
+    if (output_.rows == model_candidate_count &&
+        output_.cols == model_output_width)
     {
       valid_ = true;
+      transposed_ = false;
+      return;
+    }
+    if (output_.rows == model_output_width &&
+        output_.cols == model_candidate_count)
+    {
+      valid_ = true;
+      transposed_ = true;
     }
   }
 
@@ -235,18 +133,19 @@ class DirectKeypointOutputView
 
   [[nodiscard]] int CandidateCount() const
   {
-    return valid_ ? candidate_count_ : 0;
+    return valid_ ? model_candidate_count : 0;
   }
 
   [[nodiscard]] float At(int row, int field) const
   {
-    return output_.at<float>(field, row);
+    return transposed_ ? output_.at<float>(field, row)
+                       : output_.at<float>(row, field);
   }
 
  private:
   const cv::Mat& output_;
-  int candidate_count_{0};
   bool valid_{false};
+  bool transposed_{false};
 };
 
 /**
@@ -257,8 +156,8 @@ class DirectKeypointOutputView
  * @param end 结束列，开区间。
  * @return 最大值列号减去 begin 后的类别 id。
  */
-inline int ArgMaxRowRange(const DirectKeypointOutputView& output, int row,
-                          int begin, int end)
+inline int ArgMaxOutputRange(const ModelOutputView& output, int row,
+                             int begin, int end)
 {
   int best = begin;
   float best_value = output.At(row, begin);
@@ -272,6 +171,14 @@ inline int ArgMaxRowRange(const DirectKeypointOutputView& output, int row,
     }
   }
   return best - begin;
+}
+
+/**
+ * @brief Numerically stable sigmoid for objectness logits.
+ */
+inline float Sigmoid(float value)
+{
+  return 1.0F / (1.0F + std::exp(-value));
 }
 
 /**
@@ -292,41 +199,41 @@ inline bool FinitePoint(const cv::Point2f& point)
 inline double QuadArea(const std::array<cv::Point2f, 4>& points)
 {
   double area = 0.0;
-  for (std::size_t i = 0; i < points.size(); ++i)
+  for (std::size_t index = 0; index < points.size(); ++index)
   {
-    const auto& a = points[i];
-    const auto& b = points[(i + 1U) % points.size()];
-    area += static_cast<double>(a.x) * b.y - static_cast<double>(b.x) * a.y;
+    const auto& current = points[index];
+    const auto& next = points[(index + 1U) % points.size()];
+    area += static_cast<double>(current.x) * static_cast<double>(next.y) -
+            static_cast<double>(next.x) * static_cast<double>(current.y);
   }
   return std::abs(area) * 0.5;
 }
 
 /**
- * @brief 判断四个点是否构成非退化凸四边形。
+ * @brief 判断四边形是否凸。
  * @param points 顺序排列的四边形角点。
- * @return 凸且非共线时返回 true。
+ * @return 四点构成严格同向凸四边形时返回 true。
  */
 inline bool IsConvexQuad(const std::array<cv::Point2f, 4>& points)
 {
   int sign = 0;
-  for (std::size_t i = 0; i < points.size(); ++i)
+  for (std::size_t index = 0; index < points.size(); ++index)
   {
-    const cv::Point2f a = points[i];
-    const cv::Point2f b = points[(i + 1U) % points.size()];
-    const cv::Point2f c = points[(i + 2U) % points.size()];
-    const cv::Point2f ab = b - a;
-    const cv::Point2f bc = c - b;
-    const double cross = static_cast<double>(ab.x) * bc.y -
-                         static_cast<double>(ab.y) * bc.x;
+    const cv::Point2f ab = points[(index + 1U) % points.size()] - points[index];
+    const cv::Point2f bc =
+        points[(index + 2U) % points.size()] - points[(index + 1U) % points.size()];
+    const double cross =
+        static_cast<double>(ab.x) * static_cast<double>(bc.y) -
+        static_cast<double>(ab.y) * static_cast<double>(bc.x);
     if (std::abs(cross) < 1e-6)
     {
-      continue;
+      return false;
     }
+
     const int current_sign = cross > 0.0 ? 1 : -1;
     if (sign == 0)
     {
       sign = current_sign;
-      continue;
     }
     if (sign != current_sign)
     {
@@ -430,54 +337,6 @@ inline ArmorColor detect_color_from_config(int detect_color)
 }
 
 /**
- * @brief 将 dense-grid keypoint 模型的颜色类别 id 转为 ArmorColor。
- * @param color_id 模型颜色类别 id。
- * @return detector 统一颜色枚举。
- */
-inline ArmorColor color_from_direct_keypoint_id(int color_id)
-{
-  if (color_id == 0)
-  {
-    return ArmorColor::RED;
-  }
-  if (color_id == 1)
-  {
-    return ArmorColor::BLUE;
-  }
-  return ArmorColor::UNKNOWN;
-}
-
-/**
- * @brief 将 dense-grid keypoint 模型的 8 类编号 id 转为 ArmorNumber。
- * @param class_id 模型原始 class id，范围通常为 [0, 7]。
- * @return detector 统一编号枚举。
- */
-inline ArmorNumber number_from_direct_keypoint_class_id(int class_id)
-{
-  switch (class_id)
-  {
-    case 0:
-      return ArmorNumber::GUARD;
-    case 1:
-      return ArmorNumber::ONE;
-    case 2:
-      return ArmorNumber::TWO;
-    case 3:
-      return ArmorNumber::THREE;
-    case 4:
-      return ArmorNumber::FOUR;
-    case 5:
-      return ArmorNumber::FIVE;
-    case 6:
-      return ArmorNumber::OUTPOST;
-    case 7:
-      return ArmorNumber::BASE;
-    default:
-      return ArmorNumber::UNKNOWN;
-  }
-}
-
-/**
  * @brief 将网络角点顺序映射到 detector/PnP 统一顺序。
  *
  * detector 统一使用左上、右上、右下、左下。
@@ -485,7 +344,7 @@ inline ArmorNumber number_from_direct_keypoint_class_id(int class_id)
  * @param keypoints 网络输出的四点。
  * @return 左上、右上、右下、左下顺序。
  */
-inline std::array<cv::Point2f, 4> direct_keypoint_declared_to_canonical(
+inline std::array<cv::Point2f, 4> model_points_to_canonical(
     const std::array<cv::Point2f, 4>& keypoints)
 {
   return {keypoints[0], keypoints[3], keypoints[2], keypoints[1]};
@@ -528,12 +387,10 @@ inline cv::Point2f quad_center(const std::array<cv::Point2f, 4>& points)
 }
 
 /**
- * @brief 根据四个浮点角点构造像素包围盒。
- * @param points 四角点。
- * @return 至少 1x1 的整数像素包围盒。
+ * @brief Bounding box expanded symmetrically by a fraction of its width/height.
  */
-inline cv::Rect bounding_rect_from_points(
-    const std::array<cv::Point2f, 4>& points)
+inline cv::Rect expanded_bounding_rect_from_points(
+    const std::array<cv::Point2f, 4>& points, double expand)
 {
   float min_x = points[0].x;
   float max_x = points[0].x;
@@ -547,9 +404,96 @@ inline cv::Rect bounding_rect_from_points(
     max_y = std::max(max_y, point.y);
   }
 
-  return {static_cast<int>(min_x), static_cast<int>(min_y),
-          std::max(1, static_cast<int>(max_x - min_x)),
-          std::max(1, static_cast<int>(max_y - min_y))};
+  const float width = std::max(1.0F, max_x - min_x);
+  const float height = std::max(1.0F, max_y - min_y);
+  const float dx = static_cast<float>(expand) * width;
+  const float dy = static_cast<float>(expand) * height;
+  return {static_cast<int>(min_x - dx), static_cast<int>(min_y - dy),
+          std::max(1, static_cast<int>(width + 2.0F * dx)),
+          std::max(1, static_cast<int>(height + 2.0F * dy))};
+}
+
+/**
+ * @brief 当前 detector 模型颜色类别映射。
+ *
+ * Raw 0/1 map to the public blue/red enum. Raw 2/3 are not accepted by the
+ * production detector path and must be rejected upstream of candidate publish.
+ */
+inline ArmorColor color_from_model_id(int color_id)
+{
+  if (color_id == 0)
+  {
+    return ArmorColor::BLUE;
+  }
+  if (color_id == 1)
+  {
+    return ArmorColor::RED;
+  }
+  return ArmorColor::UNKNOWN;
+}
+
+/**
+ * @brief 当前 detector 模型 9-class tag 映射到 ArmorNumber。
+ */
+inline ArmorNumber number_from_model_class_id(int class_id)
+{
+  int tag = class_id;
+  if (tag == 7 || tag == 8)
+  {
+    tag = 9;
+  }
+  else if (tag == 0)
+  {
+    tag = 7;
+  }
+  else if (tag == 6)
+  {
+    tag = 8;
+  }
+
+  int public_number = tag;
+  if (tag >= 1 && tag <= 7)
+  {
+    public_number = tag - 1;
+  }
+
+  switch (public_number)
+  {
+    case 0:
+      return ArmorNumber::ONE;
+    case 1:
+      return ArmorNumber::TWO;
+    case 2:
+      return ArmorNumber::THREE;
+    case 3:
+      return ArmorNumber::FOUR;
+    case 4:
+      return ArmorNumber::FIVE;
+    case 5:
+      return ArmorNumber::OUTPOST;
+    case 6:
+      return ArmorNumber::GUARD;
+    case 7:
+      return ArmorNumber::BASE;
+    default:
+      return ArmorNumber::UNKNOWN;
+  }
+}
+
+/**
+ * @brief 当前 detector 模型输出编号对应的尺寸先验。
+ */
+inline ArmorType type_from_model_number(ArmorNumber number)
+{
+  if (number == ArmorNumber::ONE || number == ArmorNumber::TWO)
+  {
+    return ArmorType::LARGE;
+  }
+  if (ArmorNumberIsKnown(number))
+  {
+    return ArmorType::SMALL;
+  }
+  return ArmorType::INVALID;
 }
 
 }  // namespace armor_detector_detail

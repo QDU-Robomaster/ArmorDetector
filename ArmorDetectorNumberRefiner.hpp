@@ -2,7 +2,7 @@
 
 /**
  * @file ArmorDetectorNumberRefiner.hpp
- * @brief Fater-style armor number classifier used as a CPU post-refine stage.
+ * @brief Armor number classifier used as a CPU post-refine stage.
  */
 
 #include <algorithm>
@@ -22,26 +22,26 @@ namespace armor_detector_detail
 {
 
 /**
- * @brief CPU-only Fater-style MLP number classifier wrapper.
+ * @brief CPU-only MLP number classifier wrapper.
  *
  * The classifier consumes a 20x28 binary digit ROI extracted from the armor
  * quadrilateral using the same light-bar geometry used in the offline
  * cross-check scripts.
  */
-class FaterMlpNumberRefiner
+class MlpNumberRefiner
 {
  public:
   struct Prediction
   {
     bool valid{false};                         ///< Classifier ran successfully.
     ArmorNumber number{ArmorNumber::UNKNOWN}; ///< Predicted ArmorNumber enum.
-    int label_index{8};                        ///< Raw Fater label index.
+    int label_index{8};                        ///< Raw classifier label index.
     float confidence{0.0F};                    ///< Softmax confidence.
   };
 
   /**
    * @brief Load the ONNX model and force OpenCV DNN CPU execution.
-   * @param model_path Fater-style mlp.onnx path.
+   * @param model_path MLP number-refine model path.
    * @return true when the model is ready.
    */
   bool Configure(const char* model_path)
@@ -91,7 +91,7 @@ class FaterMlpNumberRefiner
   [[nodiscard]] bool Ready() const { return ready_; }
 
   /**
-   * @brief Extract the digit ROI and run Fater MLP classification.
+   * @brief Extract the digit ROI and run MLP classification.
    * @param bgr_img Source BGR image.
    * @param points Armor corners in top-left, top-right, bottom-right, bottom-left order.
    * @param type Current armor size type used to select canonical warp width.
@@ -131,7 +131,7 @@ class FaterMlpNumberRefiner
   }
 
  private:
-  static ArmorNumber NumberFromFaterIndex(int index)
+  static ArmorNumber NumberFromModelIndex(int index)
   {
     switch (index)
     {
@@ -210,7 +210,7 @@ class FaterMlpNumberRefiner
 
     prediction.valid = true;
     prediction.label_index = best;
-    prediction.number = NumberFromFaterIndex(best);
+    prediction.number = NumberFromModelIndex(best);
     prediction.confidence = best_prob;
     return prediction;
   }

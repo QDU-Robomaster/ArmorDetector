@@ -5,9 +5,7 @@
  * @brief ArmorDetector 的 OpenVINO 模型加载和单帧推理封装。
  */
 
-#include <cmath>
 #include <exception>
-#include <initializer_list>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,19 +19,19 @@ namespace armor_detector_detail
 /**
  * @brief OpenVINO armor keypoint network wrapper.
  *
- * 该类只负责模型生命周期、OpenVINO 预处理描述和同步推理。输出 tensor
- * 会被包装成 cv::Mat 视图交给 detector decoder，视图有效期由本对象保存的
- * output_tensor_ 保证到下一次 Infer() 调用前。
+ * 该类只负责模型生命周期和同步推理。输出 tensor 会被包装成 cv::Mat 视图交给
+ * detector decoder，视图有效期由本对象保存的 output_tensor_ 保证到下一次
+ * Infer() 调用前。
  */
 class OpenVinoArmorNetwork
 {
  public:
   /**
-   * @brief 加载并编译 OpenVINO dense-grid keypoint 模型。
+   * @brief 加载并编译 OpenVINO detector 模型。
    * @param model_path 模型文件路径。
    * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
    * @param performance_mode OpenVINO performance hint 名称。
-   * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
+   * @return 模型加载、张量约定检查和指定设备编译全部成功时返回 true。
    */
   bool Configure(const char* model_path, const char* device_name,
                  const char* performance_mode)
@@ -42,6 +40,7 @@ class OpenVinoArmorNetwork
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
     output_tensor_ = ov::Tensor();
+    input_shape_ = {};
 
     requested_device_name_ = NormalizeDeviceName(device_name);
     available_device_names_ = QueryAvailableDeviceNames();
@@ -55,26 +54,15 @@ class OpenVinoArmorNetwork
       input_shape_ = ModelInputShape(model);
       if (!IsValidNetworkInputShape(input_shape_))
       {
-        XR_LOG_ERROR(
-            "ArmorDetector cannot resolve model input shape");
+        XR_LOG_ERROR("ArmorDetector cannot resolve model input shape");
+        return false;
+      }
+      if (!ModelOutputShapeSupported(model))
+      {
+        XR_LOG_ERROR("ArmorDetector model output shape is unsupported");
         return false;
       }
 
-      ov::preprocess::PrePostProcessor post_processor(model);
-      auto& input = post_processor.input();
-
-      input.tensor()
-          .set_element_type(ov::element::u8)
-          .set_shape(ov::PartialShape{1, input_shape_.height,
-                                      input_shape_.width, 3})
-          .set_layout("NHWC")
-          .set_color_format(ov::preprocess::ColorFormat::BGR);
-      input.model().set_layout("NCHW");
-      auto& preprocess = input.preprocess();
-      preprocess.convert_element_type(ov::element::f32);
-      preprocess.scale(255.0);
-
-      model = post_processor.build();
       compiled_model_ = ov_core_.compile_model(
           model, device_name_,
           ov::hint::performance_mode(
@@ -82,18 +70,17 @@ class OpenVinoArmorNetwork
       infer_request_ = compiled_model_.create_infer_request();
       model_ready_ = true;
       XR_LOG_PASS(
-          "ArmorDetector loaded %s model on OpenVINO device %s requested %s "
-          "mode %s",
-          detector_model_name, device_name_.c_str(),
+          "ArmorDetector loaded model output=%dx%d input=%dx%d on OpenVINO device %s requested %s mode %s",
+          model_candidate_count, model_output_width, input_shape_.width,
+          input_shape_.height, device_name_.c_str(),
           requested_device_name_.c_str(), performance_mode_name_.c_str());
       return true;
     }
     catch (const std::exception& exception)
     {
-      XR_LOG_ERROR(
-          "ArmorDetector failed to load %s model on device %s mode %s: %s",
-          detector_model_name, device_name_.c_str(),
-          performance_mode_name_.c_str(), exception.what());
+      XR_LOG_ERROR("ArmorDetector failed to load model on device %s mode %s: %s",
+                   device_name_.c_str(), performance_mode_name_.c_str(),
+                   exception.what());
       return false;
     }
   }
@@ -135,8 +122,8 @@ class OpenVinoArmorNetwork
   [[nodiscard]] NetworkInputShape InputShape() const { return input_shape_; }
 
   /**
-   * @brief 对一帧已经 resize 到网络张量宽高的 BGR 图像执行推理。
-   * @param input NHWC BGR8 输入图像。
+   * @brief 对一帧已经 resize 到网络张量宽高的 RGB 图像执行推理。
+   * @param input HWC RGB8 输入图像。
    * @param output 输出矩阵视图，行是候选，列是 keypoint/score/class 字段。
    * @return 推理成功且输出非空时返回 true。
    */
@@ -150,36 +137,32 @@ class OpenVinoArmorNetwork
 
     try
     {
-      ov::Tensor input_tensor(
-          ov::element::u8,
-          ov::Shape{1, static_cast<size_t>(input_shape_.height),
-                    static_cast<size_t>(input_shape_.width), 3},
-          input.data);
+      const ov::Shape input_tensor_shape{
+          static_cast<size_t>(input_shape_.height),
+          static_cast<size_t>(input_shape_.width), 3};
+      ov::Tensor input_tensor(ov::element::u8, input_tensor_shape, input.data);
       infer_request_.set_input_tensor(input_tensor);
       infer_request_.infer();
 
       output_tensor_ = infer_request_.get_output_tensor();
       const auto output_shape = output_tensor_.get_shape();
-      if (output_shape.size() < 3U)
+      if (output_shape.size() != 2U && output_shape.size() != 3U)
       {
         XR_LOG_ERROR("ArmorDetector network output rank invalid: %u",
                      static_cast<unsigned>(output_shape.size()));
         return false;
       }
 
-      output = cv::Mat(static_cast<int>(output_shape[1]),
-                       static_cast<int>(output_shape[2]), CV_32F,
-                       output_tensor_.data<float>());
-      const auto expected_candidate_count =
-          DirectKeypointCandidateCount(DirectKeypointGridShape());
-      if (expected_candidate_count <= 0 ||
-          output.rows != direct_keypoint_output_width ||
-          output.cols != expected_candidate_count)
+      const int rows = static_cast<int>(
+          output_shape.size() == 3U ? output_shape[1] : output_shape[0]);
+      const int cols = static_cast<int>(
+          output_shape.size() == 3U ? output_shape[2] : output_shape[1]);
+      output = cv::Mat(rows, cols, CV_32F, output_tensor_.data<float>());
+      if (!OutputShapeMatches(output))
       {
         XR_LOG_ERROR(
-            "ArmorDetector network output shape invalid: rows=%d cols=%d expected=21x%d grid=%dx%d",
-            output.rows, output.cols, expected_candidate_count,
-            direct_keypoint_grid_width, direct_keypoint_grid_height);
+            "ArmorDetector network output shape invalid: rows=%d cols=%d expected=%dx%d",
+            output.rows, output.cols, model_candidate_count, model_output_width);
         output.release();
         return false;
       }
@@ -209,20 +192,60 @@ class OpenVinoArmorNetwork
   }
 
   /**
-   * @brief 从 OpenVINO 模型读取固定 NCHW 张量宽高。
+   * @brief 从 OpenVINO 模型读取固定张量宽高。
    * @param model 已加载模型。
    * @return 可解析时返回宽高；否则返回 0 尺寸。
    */
-  static NetworkInputShape ModelInputShape(const std::shared_ptr<ov::Model>& model)
+  static NetworkInputShape ModelInputShape(
+      const std::shared_ptr<ov::Model>& model)
   {
     const auto shape = model->input().get_partial_shape();
-    if (shape.rank().is_dynamic() || shape.size() != 4U ||
-        shape[2].is_dynamic() || shape[3].is_dynamic())
+    if (shape.rank().is_dynamic() || shape.size() != 3U ||
+        shape[0].is_dynamic() || shape[1].is_dynamic() ||
+        shape[2].is_dynamic() || shape[2].get_length() != 3)
     {
       return {};
     }
-    return {static_cast<int>(shape[3].get_length()),
-            static_cast<int>(shape[2].get_length())};
+    return {static_cast<int>(shape[1].get_length()),
+            static_cast<int>(shape[0].get_length())};
+  }
+
+  /**
+   * @brief 判断模型输出 shape 是否满足当前 decoder 约定。
+   */
+  static bool ModelOutputShapeSupported(const std::shared_ptr<ov::Model>& model)
+  {
+    const auto shape = model->output().get_partial_shape();
+    if (shape.rank().is_dynamic())
+    {
+      return false;
+    }
+    if (shape.size() == 3U && !shape[1].is_dynamic() &&
+        !shape[2].is_dynamic())
+    {
+      return shape[1].get_length() == model_candidate_count &&
+             shape[2].get_length() == model_output_width;
+    }
+    if (shape.size() == 2U && !shape[0].is_dynamic() &&
+        !shape[1].is_dynamic())
+    {
+      return (shape[0].get_length() == model_candidate_count &&
+              shape[1].get_length() == model_output_width) ||
+             (shape[0].get_length() == model_output_width &&
+              shape[1].get_length() == model_candidate_count);
+    }
+    return false;
+  }
+
+  /**
+   * @brief Check cv::Mat output dimensions against active decoder.
+   */
+  [[nodiscard]] static bool OutputShapeMatches(const cv::Mat& output)
+  {
+    return (output.rows == model_candidate_count &&
+            output.cols == model_output_width) ||
+           (output.rows == model_output_width &&
+            output.cols == model_candidate_count);
   }
 
   /**
@@ -393,16 +416,16 @@ class OpenVinoArmorNetwork
     return ov::hint::PerformanceMode::LATENCY;
   }
 
-  std::vector<std::string> available_device_names_{};                ///< OpenVINO 可见设备。
-  std::string requested_device_name_{"AUTO_DETECT"};                 ///< 配置请求设备。
-  std::string device_name_{"CPU"};                                   ///< OpenVINO 编译设备。
-  std::string performance_mode_name_{"LATENCY"};                     ///< OpenVINO 性能模式。
-  bool model_ready_{false};                                         ///< 模型是否可用。
-  NetworkInputShape input_shape_{};                                 ///< 当前网络张量宽高。
-  ov::Core ov_core_{};                                               ///< OpenVINO runtime core。
-  ov::CompiledModel compiled_model_{};                               ///< 已编译的 OpenVINO 模型。
-  ov::InferRequest infer_request_{};                                 ///< 复用的同步推理请求。
-  ov::Tensor output_tensor_{};                                       ///< 保存输出视图生命周期的 tensor。
+  std::vector<std::string> available_device_names_{}; ///< OpenVINO 可见设备。
+  std::string requested_device_name_{"AUTO_DETECT"};  ///< 配置请求设备。
+  std::string device_name_{"CPU"};                    ///< OpenVINO 编译设备。
+  std::string performance_mode_name_{"LATENCY"};      ///< OpenVINO 性能模式。
+  bool model_ready_{false};                           ///< 模型是否可用。
+  NetworkInputShape input_shape_{};                   ///< 当前网络张量宽高。
+  ov::Core ov_core_{};                                ///< OpenVINO runtime core。
+  ov::CompiledModel compiled_model_{};                ///< 已编译的 OpenVINO 模型。
+  ov::InferRequest infer_request_{};                  ///< 复用的同步推理请求。
+  ov::Tensor output_tensor_{};                        ///< 保存输出视图生命周期的 tensor。
 };
 
 }  // namespace armor_detector_detail

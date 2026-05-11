@@ -15,12 +15,7 @@
 template <CameraTypes::CameraInfo CameraInfoV>
 bool ArmorDetector<CameraInfoV>::ValidateArmorType(const CandidateArmor& armor) const
 {
-  if (armor.type == ArmorType::SMALL)
-  {
-    return !ArmorNumberIsLarge(armor.number);
-  }
-
-  return !ArmorNumberIsSmall(armor.number);
+  return armor.type != ArmorType::INVALID;
 }
 
 /**
@@ -33,18 +28,8 @@ template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::ApplyNumberTypePrior(
     CandidateArmor& armor) const
 {
-  if (ArmorNumberIsLarge(armor.number))
-  {
-    armor.type = ArmorType::LARGE;
-  }
-  else if (ArmorNumberIsSmall(armor.number))
-  {
-    armor.type = ArmorType::SMALL;
-  }
-  else
-  {
-    armor.type = InferArmorType(armor);
-  }
+  const ArmorType model_type = detail::type_from_model_number(armor.number);
+  armor.type = model_type != ArmorType::INVALID ? model_type : InferArmorType(armor);
 }
 
 /**

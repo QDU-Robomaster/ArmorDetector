@@ -26,8 +26,8 @@
 
 默认模型文件:
 
-- `model/armor_keypoint_bgr.xml`
-- `model/armor_keypoint_bgr.bin`
+- `model/armor_detector_640x512.onnx`
+- `model/armor_number_mlp.onnx`
 
 ## 结果内容
 
@@ -48,8 +48,11 @@
   动态切换敌方颜色；未收到有效 ID 时仍使用 `detect_color`
 - `referee_domain`: 裁判系统摘要包所在 topic domain，默认 `host`
 - `referee_topic`: 裁判系统摘要包 topic 名，默认 `robot_game_ref`
-- `network.score_threshold`: 网络候选置信度门限
 - `network.min_confidence`: 最终结果置信度门限
+- `network.logit_threshold`: 网络 objectness 原始 logit 门限
+- `network.nms_threshold`: OpenCV NMS IoU 门限
+- `network.bbox_expand`: NMS 前包围盒扩张比例
+- `network.max_detections`: NMS 后最多保留候选数量
 - `network.enable_quad_check`: 是否启用四边形面积检查
 - `network.min_quad_area_px`: 四边形最小面积，单位为像素平方
 - `network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
@@ -81,5 +84,4 @@ CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
 - 线性深度修正系数需要用对应相机、模型、场景数据重新标定；不要把裸像素系数跨相机复用。
 - 原始视频、同步数据和回放包落盘由相机/同步模块负责，不放在 detector 里。
 - 相机参数来自模板参数 `Info`，必须与实际图像尺寸、编码、内参和畸变参数一致。
-- 相机帧可以是实际采集尺寸；处理前按模型要求缩放。decoder 按输出网格
-  解码，再映射回相机图像。
+- 相机帧可以是实际采集尺寸；处理前按模型要求缩放。decoder 将网络输出坐标映射回相机图像。
