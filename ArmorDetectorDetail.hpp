@@ -14,6 +14,43 @@ namespace armor_detector_detail
 {
 
 /**
+ * @brief Detector model selected by runtime config.
+ */
+enum class DetectorModelVariant : uint8_t
+{
+  QDU_RESIZE512_BGR = 0, ///< Current QDU dense-grid OpenVINO IR.
+  SZU_U8_RGB_HWC = 1,   ///< SHtech/SZU UINT8 HWC ONNX, RGB input.
+};
+
+/**
+ * @brief Model input tensor memory contract used by OpenVINO Infer().
+ */
+enum class NetworkInputTensorLayout : uint8_t
+{
+  NHWC_BATCHED = 0, ///< Tensor shape [1,H,W,3].
+  HWC = 1,          ///< Tensor shape [H,W,3].
+};
+
+/**
+ * @brief Model input color contract after BuildNetworkInput().
+ */
+enum class NetworkInputColor : uint8_t
+{
+  BGR = 0,
+  RGB = 1,
+};
+
+/**
+ * @brief Decoder contract selected from the loaded model.
+ */
+enum class NetworkOutputLayout : uint8_t
+{
+  QDU_GRID21 = 0, ///< [1,21,N] dense-grid relative keypoint output.
+  SHTECH22 = 1,  ///< [1,20160,22] absolute SHtech/SZU output.
+  UNKNOWN = 2,
+};
+
+/**
  * @brief dense-grid keypoint detector 输出网格宽度。
  */
 constexpr int direct_keypoint_grid_width = 512;
@@ -24,17 +61,6 @@ constexpr int direct_keypoint_grid_width = 512;
 constexpr int direct_keypoint_grid_height = 384;
 
 /**
- * @brief detector 模型日志名称。
- */
-inline constexpr const char* detector_model_name =
-    "direct_keypoint_dense_grid";
-
-/**
- * @brief dense-grid keypoint detector 的输出候选数量。
- */
-constexpr int direct_keypoint_candidate_count = 4032;
-
-/**
  * @brief dense-grid keypoint detector 的输出列数。
  */
 constexpr int direct_keypoint_output_width = 21;
@@ -43,6 +69,69 @@ constexpr int direct_keypoint_output_width = 21;
  * @brief dense-grid keypoint detector 置信度排序后参与交叠抑制的最大候选数。
  */
 constexpr int direct_keypoint_keep_topk = 128;
+
+/**
+ * @brief SHtech/SZU 512x640 absolute-output model constants.
+ */
+constexpr int shtech_candidate_count = 20160;
+constexpr int shtech_output_width = 22;
+constexpr double shtech_default_logit_threshold = 0.619;
+constexpr double shtech_default_bbox_expand = 0.1;
+constexpr int shtech_default_max_detections = 128;
+
+/**
+ * @brief Parse runtime model variant text.
+ * @param text Config string; empty value keeps the current QDU model.
+ * @return Known model variant.
+ */
+inline DetectorModelVariant ParseDetectorModelVariant(const char* text)
+{
+  if (text == nullptr || text[0] == '\0')
+  {
+    return DetectorModelVariant::QDU_RESIZE512_BGR;
+  }
+  const std::string value(text);
+  if (value == "szu_u8_rgb_hwc" || value == "szu_u8_640_rgb_hwc" ||
+      value == "szu_u8" || value == "shtech22")
+  {
+    return DetectorModelVariant::SZU_U8_RGB_HWC;
+  }
+  return DetectorModelVariant::QDU_RESIZE512_BGR;
+}
+
+/**
+ * @brief Stable name for logs.
+ * @param variant Model variant.
+ * @return String literal model variant name.
+ */
+inline const char* DetectorModelVariantName(DetectorModelVariant variant)
+{
+  switch (variant)
+  {
+    case DetectorModelVariant::SZU_U8_RGB_HWC:
+      return "szu_u8_rgb_hwc";
+    case DetectorModelVariant::QDU_RESIZE512_BGR:
+    default:
+      return "qdu_resize512_bgr";
+  }
+}
+
+/**
+ * @brief Stable name for decoder logs.
+ */
+inline const char* NetworkOutputLayoutName(NetworkOutputLayout layout)
+{
+  switch (layout)
+  {
+    case NetworkOutputLayout::SHTECH22:
+      return "shtech22";
+    case NetworkOutputLayout::QDU_GRID21:
+      return "qdu_grid21";
+    case NetworkOutputLayout::UNKNOWN:
+    default:
+      return "unknown";
+  }
+}
 
 /**
  * @brief 同步帧 worker 单次等待超时，单位 ms。
@@ -250,6 +339,56 @@ class DirectKeypointOutputView
 };
 
 /**
+ * @brief SHtech/SZU 20160x22 absolute detector output view.
+ *
+ * OpenVINO exposes [1,20160,22] as a 2D [20160,22] Mat in this wrapper. The
+ * transposed [22,20160] form is accepted to keep the view tolerant of output
+ * adapters that flatten dimensions differently.
+ */
+class Shtech22OutputView
+{
+ public:
+  explicit Shtech22OutputView(const cv::Mat& output) : output_(output)
+  {
+    if (output_.type() != CV_32F || output_.dims != 2)
+    {
+      return;
+    }
+    if (output_.rows == shtech_candidate_count &&
+        output_.cols == shtech_output_width)
+    {
+      valid_ = true;
+      transposed_ = false;
+      return;
+    }
+    if (output_.rows == shtech_output_width &&
+        output_.cols == shtech_candidate_count)
+    {
+      valid_ = true;
+      transposed_ = true;
+    }
+  }
+
+  [[nodiscard]] bool Valid() const { return valid_; }
+
+  [[nodiscard]] int CandidateCount() const
+  {
+    return valid_ ? shtech_candidate_count : 0;
+  }
+
+  [[nodiscard]] float At(int row, int field) const
+  {
+    return transposed_ ? output_.at<float>(field, row)
+                       : output_.at<float>(row, field);
+  }
+
+ private:
+  const cv::Mat& output_;
+  bool valid_{false};
+  bool transposed_{false};
+};
+
+/**
  * @brief 在输出视图某一候选的指定字段范围内取 argmax。
  * @param output 输出视图。
  * @param row 行号。
@@ -272,6 +411,34 @@ inline int ArgMaxRowRange(const DirectKeypointOutputView& output, int row,
     }
   }
   return best - begin;
+}
+
+/**
+ * @brief Argmax over one SHtech/SZU candidate row.
+ */
+inline int ArgMaxShtechRange(const Shtech22OutputView& output, int row,
+                             int begin, int end)
+{
+  int best = begin;
+  float best_value = output.At(row, begin);
+  for (int index = begin + 1; index < end; ++index)
+  {
+    const float value = output.At(row, index);
+    if (value > best_value)
+    {
+      best_value = value;
+      best = index;
+    }
+  }
+  return best - begin;
+}
+
+/**
+ * @brief Numerically stable sigmoid for SHtech objectness logits.
+ */
+inline float Sigmoid(float value)
+{
+  return 1.0F / (1.0F + std::exp(-value));
 }
 
 /**
@@ -550,6 +717,116 @@ inline cv::Rect bounding_rect_from_points(
   return {static_cast<int>(min_x), static_cast<int>(min_y),
           std::max(1, static_cast<int>(max_x - min_x)),
           std::max(1, static_cast<int>(max_y - min_y))};
+}
+
+/**
+ * @brief Bounding box expanded symmetrically by a fraction of its width/height.
+ */
+inline cv::Rect expanded_bounding_rect_from_points(
+    const std::array<cv::Point2f, 4>& points, double expand)
+{
+  float min_x = points[0].x;
+  float max_x = points[0].x;
+  float min_y = points[0].y;
+  float max_y = points[0].y;
+  for (const auto& point : points)
+  {
+    min_x = std::min(min_x, point.x);
+    max_x = std::max(max_x, point.x);
+    min_y = std::min(min_y, point.y);
+    max_y = std::max(max_y, point.y);
+  }
+
+  const float width = std::max(1.0F, max_x - min_x);
+  const float height = std::max(1.0F, max_y - min_y);
+  const float dx = static_cast<float>(expand) * width;
+  const float dy = static_cast<float>(expand) * height;
+  return {static_cast<int>(min_x - dx), static_cast<int>(min_y - dy),
+          std::max(1, static_cast<int>(width + 2.0F * dx)),
+          std::max(1, static_cast<int>(height + 2.0F * dy))};
+}
+
+/**
+ * @brief SHtech/SZU color mapping.
+ *
+ * Raw 0/1 map to the public blue/red enum. Raw 2/3 are not accepted by the
+ * production detector path and must be rejected upstream of candidate publish.
+ */
+inline ArmorColor color_from_shtech_id(int color_id)
+{
+  if (color_id == 0)
+  {
+    return ArmorColor::BLUE;
+  }
+  if (color_id == 1)
+  {
+    return ArmorColor::RED;
+  }
+  return ArmorColor::UNKNOWN;
+}
+
+/**
+ * @brief SHtech/SZU 9-class tag mapping into ArmorNumber.
+ */
+inline ArmorNumber number_from_shtech_class_id(int class_id)
+{
+  int tag = class_id;
+  if (tag == 7 || tag == 8)
+  {
+    tag = 9;
+  }
+  else if (tag == 0)
+  {
+    tag = 7;
+  }
+  else if (tag == 6)
+  {
+    tag = 8;
+  }
+
+  int qdu_number = tag;
+  if (tag >= 1 && tag <= 7)
+  {
+    qdu_number = tag - 1;
+  }
+
+  switch (qdu_number)
+  {
+    case 0:
+      return ArmorNumber::ONE;
+    case 1:
+      return ArmorNumber::TWO;
+    case 2:
+      return ArmorNumber::THREE;
+    case 3:
+      return ArmorNumber::FOUR;
+    case 4:
+      return ArmorNumber::FIVE;
+    case 5:
+      return ArmorNumber::OUTPOST;
+    case 6:
+      return ArmorNumber::GUARD;
+    case 7:
+      return ArmorNumber::BASE;
+    default:
+      return ArmorNumber::UNKNOWN;
+  }
+}
+
+/**
+ * @brief SHtech/SZU detector type rule derived from model class convention.
+ */
+inline ArmorType shtech_type_from_number(ArmorNumber number)
+{
+  if (number == ArmorNumber::ONE || number == ArmorNumber::TWO)
+  {
+    return ArmorType::LARGE;
+  }
+  if (ArmorNumberIsKnown(number))
+  {
+    return ArmorType::SMALL;
+  }
+  return ArmorType::INVALID;
 }
 
 }  // namespace armor_detector_detail

@@ -75,13 +75,27 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
       static_cast<double>(bgr_img.cols) / std::max(1, input_shape.width);
   mapping.y_scale =
       static_cast<double>(bgr_img.rows) / std::max(1, input_shape.height);
-  const auto grid_offset =
-      detail::NetworkGridOffset(input_shape, detail::DirectKeypointGridShape());
-  mapping.x_offset = grid_offset.x;
-  mapping.y_offset = grid_offset.y;
+  if (network_.OutputLayout() == detail::NetworkOutputLayout::QDU_GRID21)
+  {
+    const auto grid_offset = detail::NetworkGridOffset(
+        input_shape, detail::DirectKeypointGridShape());
+    mapping.x_offset = grid_offset.x;
+    mapping.y_offset = grid_offset.y;
+  }
+  else
+  {
+    mapping.x_offset = 0;
+    mapping.y_offset = 0;
+  }
 
   cv::Mat input;
   cv::resize(bgr_img, input, cv::Size(input_shape.width, input_shape.height));
+  if (network_.InputColor() == detail::NetworkInputColor::RGB)
+  {
+    cv::Mat rgb_input;
+    cv::cvtColor(input, rgb_input, cv::COLOR_BGR2RGB);
+    input = std::move(rgb_input);
+  }
   return input;
 }
 
@@ -106,32 +120,69 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   const ArmorColor target_color = CurrentTargetColor();
 
   const auto input_shape = network_.InputShape();
-  const auto grid_shape = detail::DirectKeypointGridShape();
-  const detail::DirectKeypointOutputView output_view(output, grid_shape);
-  if (!output_view.Valid())
+  if (network_.OutputLayout() == detail::NetworkOutputLayout::QDU_GRID21)
   {
-    XR_LOG_ERROR(
-        "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=21x%d input=%dx%d grid=%dx%d",
-        output.rows, output.cols, output.type(),
-        detail::DirectKeypointCandidateCount(grid_shape),
-        input_shape.width, input_shape.height, grid_shape.width,
-        grid_shape.height);
-    ++counters_.discarded_count;
-    return {};
-  }
-
-  for (int row = 0; row < output_view.CandidateCount(); ++row)
-  {
-    const auto detection = DecodeDirectKeypointDetection(mapping, output_view, row);
-    if (!detection.has_value())
+    const auto grid_shape = detail::DirectKeypointGridShape();
+    const detail::DirectKeypointOutputView output_view(output, grid_shape);
+    if (!output_view.Valid())
     {
-      continue;
+      XR_LOG_ERROR(
+          "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=21x%d input=%dx%d grid=%dx%d",
+          output.rows, output.cols, output.type(),
+          detail::DirectKeypointCandidateCount(grid_shape),
+          input_shape.width, input_shape.height, grid_shape.width,
+          grid_shape.height);
+      ++counters_.discarded_count;
+      return {};
     }
 
-    counters_.max_objectness =
-        std::max(counters_.max_objectness,
-                 static_cast<double>(detection->confidence));
-    detections.emplace_back(*detection);
+    for (int row = 0; row < output_view.CandidateCount(); ++row)
+    {
+      const auto detection =
+          DecodeDirectKeypointDetection(mapping, output_view, row);
+      if (!detection.has_value())
+      {
+        continue;
+      }
+
+      counters_.max_objectness =
+          std::max(counters_.max_objectness,
+                   static_cast<double>(detection->confidence));
+      detections.emplace_back(*detection);
+    }
+  }
+  else if (network_.OutputLayout() == detail::NetworkOutputLayout::SHTECH22)
+  {
+    const detail::Shtech22OutputView output_view(output);
+    if (!output_view.Valid())
+    {
+      XR_LOG_ERROR(
+          "ArmorDetector SHtech output shape invalid: rows=%d cols=%d type=%d expected=%dx%d input=%dx%d",
+          output.rows, output.cols, output.type(), detail::shtech_candidate_count,
+          detail::shtech_output_width, input_shape.width, input_shape.height);
+      ++counters_.discarded_count;
+      return {};
+    }
+
+    for (int row = 0; row < output_view.CandidateCount(); ++row)
+    {
+      const auto detection = DecodeShtech22Detection(mapping, output_view, row);
+      if (!detection.has_value())
+      {
+        continue;
+      }
+
+      counters_.max_objectness =
+          std::max(counters_.max_objectness,
+                   static_cast<double>(detection->confidence));
+      detections.emplace_back(*detection);
+    }
+  }
+  else
+  {
+    XR_LOG_ERROR("ArmorDetector decoder layout unknown");
+    ++counters_.discarded_count;
+    return {};
   }
   counters_.decoded_count = static_cast<uint32_t>(detections.size());
 
@@ -140,7 +191,10 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
     return {};
   }
 
-  const std::vector<int> indices = SelectDetectionsAfterOverlapSuppression(detections);
+  const std::vector<int> indices =
+      network_.OutputLayout() == detail::NetworkOutputLayout::SHTECH22
+          ? SelectDetectionsAfterOpenCvNms(detections)
+          : SelectDetectionsAfterOverlapSuppression(detections);
   counters_.overlap_kept_count = static_cast<uint32_t>(indices.size());
 
   std::vector<CandidateArmor> armors;
@@ -176,6 +230,52 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   }
 
   return armors;
+}
+
+/**
+ * @brief 执行 SHtech/SZU 候选 NMS。
+ *
+ * score threshold 使用 network.min_confidence，IoU threshold 使用
+ * network.nms_threshold，然后按 confidence 降序截断 max_detections。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+std::vector<int> ArmorDetector<CameraInfoV>::SelectDetectionsAfterOpenCvNms(
+    const std::vector<NetworkDetection>& detections) const
+{
+  if (detections.empty())
+  {
+    return {};
+  }
+
+  std::vector<cv::Rect> boxes;
+  std::vector<float> scores;
+  boxes.reserve(detections.size());
+  scores.reserve(detections.size());
+  for (const auto& detection : detections)
+  {
+    boxes.push_back(detection.box);
+    scores.push_back(detection.confidence);
+  }
+
+  std::vector<int> indices;
+  cv::dnn::NMSBoxes(
+      boxes, scores, static_cast<float>(cfg_.network.min_confidence),
+      static_cast<float>(cfg_.network.nms_threshold), indices);
+  std::sort(indices.begin(), indices.end(),
+            [&detections](int lhs, int rhs)
+            {
+              return detections[static_cast<std::size_t>(lhs)].confidence >
+                     detections[static_cast<std::size_t>(rhs)].confidence;
+            });
+  const int max_detections =
+      cfg_.network.max_detections > 0
+          ? cfg_.network.max_detections
+          : detail::shtech_default_max_detections;
+  if (static_cast<int>(indices.size()) > max_detections)
+  {
+    indices.resize(static_cast<std::size_t>(max_detections));
+  }
+  return indices;
 }
 
 /**
@@ -309,6 +409,71 @@ ArmorDetector<CameraInfoV>::DecodeDirectKeypointDetection(
   detection.confidence = static_cast<float>(score);
   detection.points = points;
   detection.box = detail::bounding_rect_from_points(detection.points);
+  return detection;
+}
+
+/**
+ * @brief 解码 SHtech/SZU 20160x22 absolute-output 模型的单行输出。
+ *
+ * 该 decoder 使用 SZU U8 模型约定：RGB HWC UINT8 输入、objectness raw logit、
+ * raw color 0/1 映射到 QDU 颜色、raw color 2/3 直接拒绝、9-class SHtech tag
+ * 映射到 QDU enum，角点按模型原顺序 [0,3,2,1] 转成 TL/TR/BR/BL。
+ */
+template <CameraTypes::CameraInfo CameraInfoV>
+std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
+ArmorDetector<CameraInfoV>::DecodeShtech22Detection(
+    const detail::NetworkInputMapping& mapping,
+    const detail::Shtech22OutputView& output, int row) const
+{
+  if (!output.Valid() || row >= output.CandidateCount())
+  {
+    return std::nullopt;
+  }
+
+  const float objectness_logit = output.At(row, 8);
+  const double logit_threshold =
+      cfg_.network.logit_threshold > 0.0
+          ? cfg_.network.logit_threshold
+          : detail::shtech_default_logit_threshold;
+  if (objectness_logit < static_cast<float>(logit_threshold))
+  {
+    return std::nullopt;
+  }
+
+  const int raw_color_id = detail::ArgMaxShtechRange(output, row, 9, 13);
+  if (raw_color_id == 2 || raw_color_id == 3)
+  {
+    return std::nullopt;
+  }
+  const int raw_class_id = detail::ArgMaxShtechRange(output, row, 13, 22);
+
+  std::array<cv::Point2f, 4> declared_points{};
+  for (int point_index = 0; point_index < 4; ++point_index)
+  {
+    const float x = output.At(row, point_index * 2);
+    const float y = output.At(row, point_index * 2 + 1);
+    declared_points[static_cast<std::size_t>(point_index)] =
+        mapping.MapToSource(x, y);
+  }
+
+  const auto points =
+      detail::direct_keypoint_declared_to_canonical(declared_points);
+  if (cfg_.network.enable_quad_check &&
+      !detail::IsUsableQuad(points, cfg_.network.min_quad_area_px))
+  {
+    return std::nullopt;
+  }
+
+  NetworkDetection detection;
+  detection.color = detail::color_from_shtech_id(raw_color_id);
+  detection.number = detail::number_from_shtech_class_id(raw_class_id);
+  detection.confidence = detail::Sigmoid(objectness_logit);
+  detection.points = points;
+  const double bbox_expand =
+      cfg_.network.bbox_expand >= 0.0 ? cfg_.network.bbox_expand
+                                      : detail::shtech_default_bbox_expand;
+  detection.box =
+      detail::expanded_bounding_rect_from_points(detection.points, bbox_expand);
   return detection;
 }
 
