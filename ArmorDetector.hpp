@@ -13,6 +13,11 @@ constructor_args:
       min_quad_area_px: 16.0
       openvino_device: "AUTO_DETECT"
       openvino_performance_mode: "LATENCY"
+      model_variant: "qdu_resize512_bgr"
+      logit_threshold: 0.619
+      nms_threshold: 0.45
+      bbox_expand: 0.1
+      max_detections: 128
     referee_auto_detect_color: false
     referee_domain: "host"
     referee_topic: "robot_game_ref"
@@ -70,12 +75,14 @@ depends:
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include <Eigen/Dense>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
+#include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include "CameraFrameSync.hpp"
@@ -87,13 +94,53 @@ depends:
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
 #include "ArmorDetectorNumberRefiner.hpp"
+
+#if __has_include("VisionPreview.hpp")
 #include "VisionPreview.hpp"
+#else
+class VisionPreview
+{
+ public:
+  struct RuntimeParam
+  {
+    bool enabled{false};
+    std::string_view preview_window_name{"armor_detector_preview"};
+    double preview_scale{0.5};
+    int preview_wait_key_ms{1};
+    std::size_t queue_capacity{1};
+    std::string_view output_mode{"window"};
+    std::string_view web_bind_address{"0.0.0.0"};
+    uint16_t web_port{8080};
+    std::string_view web_stream_name{"armor_detector"};
+    double max_fps{30.0};
+  };
+
+  bool Start(const RuntimeParam& runtime)
+  {
+    if (runtime.enabled)
+    {
+      XR_LOG_WARN("VisionPreview module unavailable; detector preview disabled");
+    }
+    return false;
+  }
+  void Stop() {}
+  [[nodiscard]] bool Running() const { return false; }
+  template <typename DrawCallback>
+  bool Submit(const cv::Mat&, DrawCallback&&)
+  {
+    return false;
+  }
+};
+#endif
 
 #ifndef ARMOR_DETECTOR_MODEL_PATH
 #error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
 #endif
 #ifndef ARMOR_DETECTOR_NUMBER_MODEL_PATH
 #error "ARMOR_DETECTOR_NUMBER_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
+#endif
+#ifndef ARMOR_DETECTOR_SZU_U8_MODEL_PATH
+#error "ARMOR_DETECTOR_SZU_U8_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
 #endif
 
 /**
@@ -141,6 +188,16 @@ class ArmorDetector : public LibXR::Application
     const char* openvino_device{"AUTO_DETECT"};
     /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
     const char* openvino_performance_mode{"LATENCY"};
+    /// 模型 artifact 选择；qdu_resize512_bgr 或 szu_u8_rgb_hwc。
+    const char* model_variant{"qdu_resize512_bgr"};
+    /// SHtech/SZU objectness 原始 logit 门限；QDU 路径继续使用 score_threshold。
+    double logit_threshold{0.619};
+    /// OpenCV NMS IoU 门限；当前只用于 SHtech/SZU 输出。
+    double nms_threshold{0.45};
+    /// SHtech/SZU NMS bbox 扩张比例。
+    double bbox_expand{0.1};
+    /// SHtech/SZU NMS 后最多保留候选数量。
+    int max_detections{128};
   };
 
   /**
@@ -326,6 +383,14 @@ class ArmorDetector : public LibXR::Application
       const std::vector<NetworkDetection>& detections) const;
 
   /**
+   * @brief 对 SHtech/SZU 候选执行 OpenCV NMS。
+   * @param detections 已通过 decoder 门限的候选。
+   * @return NMS 后候选下标。
+   */
+  std::vector<int> SelectDetectionsAfterOpenCvNms(
+      const std::vector<NetworkDetection>& detections) const;
+
+  /**
    * @brief 解码 dense-grid keypoint 模型的一行输出。
    * @param mapping 网络输入到源图像的坐标映射。
    * @param output 网络输出矩阵。
@@ -335,6 +400,17 @@ class ArmorDetector : public LibXR::Application
   std::optional<NetworkDetection> DecodeDirectKeypointDetection(
       const detail::NetworkInputMapping& mapping,
       const detail::DirectKeypointOutputView& output, int row) const;
+
+  /**
+   * @brief 解码 SHtech/SZU 20160x22 absolute-output 模型的一行输出。
+   * @param mapping 网络输入到源图像的坐标映射。
+   * @param output 网络输出矩阵。
+   * @param row 待解码行号。
+   * @return 通过门限和四边形检查时返回检测单元。
+   */
+  std::optional<NetworkDetection> DecodeShtech22Detection(
+      const detail::NetworkInputMapping& mapping,
+      const detail::Shtech22OutputView& output, int row) const;
 
   /**
    * @brief 将网络检测单元转换为内部候选并计算基础几何指标。

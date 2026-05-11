@@ -35,13 +35,17 @@ class OpenVinoArmorNetwork
    * @param performance_mode OpenVINO performance hint 名称。
    * @return 模型加载、预处理构建和指定设备编译全部成功时返回 true。
    */
-  bool Configure(const char* model_path, const char* device_name,
-                 const char* performance_mode)
+  bool Configure(const char* model_path, DetectorModelVariant variant,
+                 const char* device_name, const char* performance_mode)
   {
     model_ready_ = false;
     compiled_model_ = ov::CompiledModel();
     infer_request_ = ov::InferRequest();
     output_tensor_ = ov::Tensor();
+    variant_ = variant;
+    input_tensor_layout_ = NetworkInputTensorLayout::NHWC_BATCHED;
+    input_color_ = NetworkInputColor::BGR;
+    output_layout_ = NetworkOutputLayout::UNKNOWN;
 
     requested_device_name_ = NormalizeDeviceName(device_name);
     available_device_names_ = QueryAvailableDeviceNames();
@@ -52,29 +56,47 @@ class OpenVinoArmorNetwork
     {
       LogDeviceSelection();
       auto model = ov_core_.read_model(model_path);
-      input_shape_ = ModelInputShape(model);
+      input_shape_ = ModelInputShape(model, variant_);
       if (!IsValidNetworkInputShape(input_shape_))
       {
         XR_LOG_ERROR(
             "ArmorDetector cannot resolve model input shape");
         return false;
       }
+      output_layout_ = ResolveOutputLayout(model, variant_);
+      if (output_layout_ == NetworkOutputLayout::UNKNOWN)
+      {
+        XR_LOG_ERROR("ArmorDetector cannot resolve model output layout");
+        return false;
+      }
 
-      ov::preprocess::PrePostProcessor post_processor(model);
-      auto& input = post_processor.input();
+      if (variant_ == DetectorModelVariant::QDU_RESIZE512_BGR)
+      {
+        input_tensor_layout_ = NetworkInputTensorLayout::NHWC_BATCHED;
+        input_color_ = NetworkInputColor::BGR;
 
-      input.tensor()
-          .set_element_type(ov::element::u8)
-          .set_shape(ov::PartialShape{1, input_shape_.height,
-                                      input_shape_.width, 3})
-          .set_layout("NHWC")
-          .set_color_format(ov::preprocess::ColorFormat::BGR);
-      input.model().set_layout("NCHW");
-      auto& preprocess = input.preprocess();
-      preprocess.convert_element_type(ov::element::f32);
-      preprocess.scale(255.0);
+        ov::preprocess::PrePostProcessor post_processor(model);
+        auto& input = post_processor.input();
 
-      model = post_processor.build();
+        input.tensor()
+            .set_element_type(ov::element::u8)
+            .set_shape(ov::PartialShape{1, input_shape_.height,
+                                        input_shape_.width, 3})
+            .set_layout("NHWC")
+            .set_color_format(ov::preprocess::ColorFormat::BGR);
+        input.model().set_layout("NCHW");
+        auto& preprocess = input.preprocess();
+        preprocess.convert_element_type(ov::element::f32);
+        preprocess.scale(255.0);
+
+        model = post_processor.build();
+      }
+      else
+      {
+        input_tensor_layout_ = NetworkInputTensorLayout::HWC;
+        input_color_ = NetworkInputColor::RGB;
+      }
+
       compiled_model_ = ov_core_.compile_model(
           model, device_name_,
           ov::hint::performance_mode(
@@ -82,9 +104,11 @@ class OpenVinoArmorNetwork
       infer_request_ = compiled_model_.create_infer_request();
       model_ready_ = true;
       XR_LOG_PASS(
-          "ArmorDetector loaded %s model on OpenVINO device %s requested %s "
+          "ArmorDetector loaded %s model layout=%s input=%dx%d on OpenVINO device %s requested %s "
           "mode %s",
-          detector_model_name, device_name_.c_str(),
+          DetectorModelVariantName(variant_),
+          NetworkOutputLayoutName(output_layout_), input_shape_.width,
+          input_shape_.height, device_name_.c_str(),
           requested_device_name_.c_str(), performance_mode_name_.c_str());
       return true;
     }
@@ -92,7 +116,7 @@ class OpenVinoArmorNetwork
     {
       XR_LOG_ERROR(
           "ArmorDetector failed to load %s model on device %s mode %s: %s",
-          detector_model_name, device_name_.c_str(),
+          DetectorModelVariantName(variant_), device_name_.c_str(),
           performance_mode_name_.c_str(), exception.what());
       return false;
     }
@@ -135,6 +159,21 @@ class OpenVinoArmorNetwork
   [[nodiscard]] NetworkInputShape InputShape() const { return input_shape_; }
 
   /**
+   * @brief Current model variant selected by runtime config.
+   */
+  [[nodiscard]] DetectorModelVariant Variant() const { return variant_; }
+
+  /**
+   * @brief Current network output decoder layout.
+   */
+  [[nodiscard]] NetworkOutputLayout OutputLayout() const { return output_layout_; }
+
+  /**
+   * @brief Required input color order for BuildNetworkInput().
+   */
+  [[nodiscard]] NetworkInputColor InputColor() const { return input_color_; }
+
+  /**
    * @brief 对一帧已经 resize 到网络张量宽高的 BGR 图像执行推理。
    * @param input NHWC BGR8 输入图像。
    * @param output 输出矩阵视图，行是候选，列是 keypoint/score/class 字段。
@@ -150,36 +189,35 @@ class OpenVinoArmorNetwork
 
     try
     {
-      ov::Tensor input_tensor(
-          ov::element::u8,
-          ov::Shape{1, static_cast<size_t>(input_shape_.height),
-                    static_cast<size_t>(input_shape_.width), 3},
-          input.data);
+      const ov::Shape input_tensor_shape =
+          input_tensor_layout_ == NetworkInputTensorLayout::HWC
+              ? ov::Shape{static_cast<size_t>(input_shape_.height),
+                          static_cast<size_t>(input_shape_.width), 3}
+              : ov::Shape{1, static_cast<size_t>(input_shape_.height),
+                          static_cast<size_t>(input_shape_.width), 3};
+      ov::Tensor input_tensor(ov::element::u8, input_tensor_shape, input.data);
       infer_request_.set_input_tensor(input_tensor);
       infer_request_.infer();
 
       output_tensor_ = infer_request_.get_output_tensor();
       const auto output_shape = output_tensor_.get_shape();
-      if (output_shape.size() < 3U)
+      if (output_shape.size() != 2U && output_shape.size() != 3U)
       {
         XR_LOG_ERROR("ArmorDetector network output rank invalid: %u",
                      static_cast<unsigned>(output_shape.size()));
         return false;
       }
 
-      output = cv::Mat(static_cast<int>(output_shape[1]),
-                       static_cast<int>(output_shape[2]), CV_32F,
-                       output_tensor_.data<float>());
-      const auto expected_candidate_count =
-          DirectKeypointCandidateCount(DirectKeypointGridShape());
-      if (expected_candidate_count <= 0 ||
-          output.rows != direct_keypoint_output_width ||
-          output.cols != expected_candidate_count)
+      const int rows = static_cast<int>(
+          output_shape.size() == 3U ? output_shape[1] : output_shape[0]);
+      const int cols = static_cast<int>(
+          output_shape.size() == 3U ? output_shape[2] : output_shape[1]);
+      output = cv::Mat(rows, cols, CV_32F, output_tensor_.data<float>());
+      if (!OutputShapeMatches(output))
       {
         XR_LOG_ERROR(
-            "ArmorDetector network output shape invalid: rows=%d cols=%d expected=21x%d grid=%dx%d",
-            output.rows, output.cols, expected_candidate_count,
-            direct_keypoint_grid_width, direct_keypoint_grid_height);
+            "ArmorDetector network output shape invalid: rows=%d cols=%d layout=%s",
+            output.rows, output.cols, NetworkOutputLayoutName(output_layout_));
         output.release();
         return false;
       }
@@ -209,20 +247,86 @@ class OpenVinoArmorNetwork
   }
 
   /**
-   * @brief 从 OpenVINO 模型读取固定 NCHW 张量宽高。
+   * @brief 从 OpenVINO 模型读取固定张量宽高。
    * @param model 已加载模型。
+   * @param variant 模型 artifact 类型。
    * @return 可解析时返回宽高；否则返回 0 尺寸。
    */
-  static NetworkInputShape ModelInputShape(const std::shared_ptr<ov::Model>& model)
+  static NetworkInputShape ModelInputShape(
+      const std::shared_ptr<ov::Model>& model, DetectorModelVariant variant)
   {
     const auto shape = model->input().get_partial_shape();
-    if (shape.rank().is_dynamic() || shape.size() != 4U ||
-        shape[2].is_dynamic() || shape[3].is_dynamic())
+    if (shape.rank().is_dynamic())
+    {
+      return {};
+    }
+
+    if (variant == DetectorModelVariant::SZU_U8_RGB_HWC)
+    {
+      if (shape.size() != 3U || shape[0].is_dynamic() ||
+          shape[1].is_dynamic() || shape[2].is_dynamic() ||
+          shape[2].get_length() != 3)
+      {
+        return {};
+      }
+      return {static_cast<int>(shape[1].get_length()),
+              static_cast<int>(shape[0].get_length())};
+    }
+
+    if (shape.size() != 4U || shape[2].is_dynamic() ||
+        shape[3].is_dynamic())
     {
       return {};
     }
     return {static_cast<int>(shape[3].get_length()),
             static_cast<int>(shape[2].get_length())};
+  }
+
+  /**
+   * @brief Resolve model output decoder layout from selected artifact.
+   */
+  static NetworkOutputLayout ResolveOutputLayout(
+      const std::shared_ptr<ov::Model>& model, DetectorModelVariant variant)
+  {
+    if (variant == DetectorModelVariant::SZU_U8_RGB_HWC)
+    {
+      return NetworkOutputLayout::SHTECH22;
+    }
+
+    const auto shape = model->output().get_partial_shape();
+    if (shape.rank().is_dynamic() || shape.size() != 3U ||
+        shape[1].is_dynamic() || shape[2].is_dynamic())
+    {
+      return NetworkOutputLayout::UNKNOWN;
+    }
+    if (shape[1].get_length() == direct_keypoint_output_width)
+    {
+      return NetworkOutputLayout::QDU_GRID21;
+    }
+    return NetworkOutputLayout::UNKNOWN;
+  }
+
+  /**
+   * @brief Check cv::Mat output dimensions against active decoder.
+   */
+  [[nodiscard]] bool OutputShapeMatches(const cv::Mat& output) const
+  {
+    if (output_layout_ == NetworkOutputLayout::QDU_GRID21)
+    {
+      const auto expected_candidate_count =
+          DirectKeypointCandidateCount(DirectKeypointGridShape());
+      return expected_candidate_count > 0 &&
+             output.rows == direct_keypoint_output_width &&
+             output.cols == expected_candidate_count;
+    }
+    if (output_layout_ == NetworkOutputLayout::SHTECH22)
+    {
+      return (output.rows == shtech_candidate_count &&
+              output.cols == shtech_output_width) ||
+             (output.rows == shtech_output_width &&
+              output.cols == shtech_candidate_count);
+    }
+    return false;
   }
 
   /**
@@ -398,6 +502,11 @@ class OpenVinoArmorNetwork
   std::string device_name_{"CPU"};                                   ///< OpenVINO 编译设备。
   std::string performance_mode_name_{"LATENCY"};                     ///< OpenVINO 性能模式。
   bool model_ready_{false};                                         ///< 模型是否可用。
+  DetectorModelVariant variant_{DetectorModelVariant::QDU_RESIZE512_BGR};
+  NetworkInputTensorLayout input_tensor_layout_{
+      NetworkInputTensorLayout::NHWC_BATCHED}; ///< 输入 tensor shape contract。
+  NetworkInputColor input_color_{NetworkInputColor::BGR}; ///< 输入颜色顺序。
+  NetworkOutputLayout output_layout_{NetworkOutputLayout::UNKNOWN}; ///< 输出 decoder。
   NetworkInputShape input_shape_{};                                 ///< 当前网络张量宽高。
   ov::Core ov_core_{};                                               ///< OpenVINO runtime core。
   ov::CompiledModel compiled_model_{};                               ///< 已编译的 OpenVINO 模型。

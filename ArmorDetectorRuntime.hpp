@@ -71,7 +71,12 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   preview_.Stop();
   preview_.Start(cfg_.preview);
 
-  const char* model_path = ARMOR_DETECTOR_MODEL_PATH;
+  const auto model_variant =
+      detail::ParseDetectorModelVariant(cfg_.network.model_variant);
+  const char* model_path =
+      model_variant == detail::DetectorModelVariant::SZU_U8_RGB_HWC
+          ? ARMOR_DETECTOR_SZU_U8_MODEL_PATH
+          : ARMOR_DETECTOR_MODEL_PATH;
 
   const char* openvino_device = cfg_.network.openvino_device;
   if (openvino_device == nullptr || openvino_device[0] == '\0')
@@ -86,9 +91,17 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   }
 
   XR_LOG_INFO(
-      "ArmorDetector model=%s device=%s mode=%s path=%s",
-      detail::detector_model_name, openvino_device, openvino_performance_mode,
-      model_path);
+      "ArmorDetector model_variant=%s device=%s mode=%s path=%s",
+      detail::DetectorModelVariantName(model_variant), openvino_device,
+      openvino_performance_mode, model_path);
+  if (model_variant == detail::DetectorModelVariant::SZU_U8_RGB_HWC)
+  {
+    XR_LOG_INFO(
+        "ArmorDetector SHtech/SZU decode logit=%.3f confidence=%.3f nms=%.3f bbox_expand=%.3f max_det=%d",
+        cfg_.network.logit_threshold, cfg_.network.min_confidence,
+        cfg_.network.nms_threshold, cfg_.network.bbox_expand,
+        cfg_.network.max_detections);
+  }
   if (cfg_.depth_correction.enabled)
   {
     XR_LOG_INFO(
@@ -97,7 +110,8 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
         cfg_.depth_correction.max_abs_correction_m,
         cfg_.depth_correction.min_quad_height_px);
   }
-  network_.Configure(model_path, openvino_device, openvino_performance_mode);
+  network_.Configure(model_path, model_variant, openvino_device,
+                     openvino_performance_mode);
 
   if (cfg_.number_refine.enabled)
   {

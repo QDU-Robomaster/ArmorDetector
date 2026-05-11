@@ -15,6 +15,11 @@
 template <CameraTypes::CameraInfo CameraInfoV>
 bool ArmorDetector<CameraInfoV>::ValidateArmorType(const CandidateArmor& armor) const
 {
+  if (network_.OutputLayout() == detail::NetworkOutputLayout::SHTECH22)
+  {
+    return armor.type != ArmorType::INVALID;
+  }
+
   if (armor.type == ArmorType::SMALL)
   {
     return !ArmorNumberIsLarge(armor.number);
@@ -33,6 +38,14 @@ template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::ApplyNumberTypePrior(
     CandidateArmor& armor) const
 {
+  if (network_.OutputLayout() == detail::NetworkOutputLayout::SHTECH22)
+  {
+    const ArmorType shtech_type = detail::shtech_type_from_number(armor.number);
+    armor.type = shtech_type != ArmorType::INVALID ? shtech_type
+                                                   : InferArmorType(armor);
+    return;
+  }
+
   if (ArmorNumberIsLarge(armor.number))
   {
     armor.type = ArmorType::LARGE;
