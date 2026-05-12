@@ -38,7 +38,7 @@ constructor_args:
       min_quad_height_px: 1.0
     number_refine:
       enabled: true
-      detector_min_confidence: 0.5
+      detector_min_confidence: 0.2
       classifier_min_confidence: 0.9
       enforce_type_compatibility: true
   sync: '@camera_frame_sync'
@@ -183,7 +183,7 @@ class ArmorDetector : public LibXR::Application
   struct NumberRefineParams
   {
     bool enabled{true};                    ///< 是否启用 MLP 数字后 refine。
-    double detector_min_confidence{0.5};   ///< detector 候选进入 refine 的最低置信度。
+    double detector_min_confidence{0.2};   ///< detector 候选进入 refine 的最低置信度。
     double classifier_min_confidence{0.9}; ///< MLP 覆盖 detector 编号的最低置信度。
     bool enforce_type_compatibility{true}; ///< 几何尺寸明确冲突时不覆盖编号。
   };
