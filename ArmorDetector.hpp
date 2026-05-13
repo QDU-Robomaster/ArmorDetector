@@ -30,17 +30,17 @@ constructor_args:
       web_port: 8080
       web_stream_name: "armor_detector"
       max_fps: 30.0
+    number_refine:
+      enabled: true
+      detector_min_confidence: 0.2
+      classifier_min_confidence: 0.9
+      enforce_type_compatibility: true
     depth_correction:
       enabled: false
       camera_normalized_features: true
       coeffs: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
       max_abs_correction_m: 0.15
       min_quad_height_px: 1.0
-    number_refine:
-      enabled: true
-      detector_min_confidence: 0.2
-      classifier_min_confidence: 0.9
-      enforce_type_compatibility: true
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -199,8 +199,8 @@ class ArmorDetector : public LibXR::Application
     const char* referee_domain{"host"};  ///< 裁判系统所在主题域。
     const char* referee_topic{"robot_game_ref"}; ///< 裁判系统摘要包主题名。
     VisionPreview::RuntimeParam preview{}; ///< 可选实时预览配置。
-    DepthCorrectionParams depth_correction{}; ///< 可选 PnP 深度修正配置。
     NumberRefineParams number_refine{}; ///< 可选 MLP 数字后 refine 配置。
+    DepthCorrectionParams depth_correction{}; ///< 可选 PnP 深度修正配置。
   };
 
   /**
