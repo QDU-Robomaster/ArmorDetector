@@ -55,8 +55,8 @@ template_args:
       projection_matrix: [600.0, 0.0, 400.0, 0.0, 0.0, 600.0, 300.0, 0.0, 0.0, 0.0, 1.0, 0.0]
 required_hardware: []
 depends:
-  - CameraFrameSync
-  - VisionPreview
+  - qdu-future/CameraFrameSync
+  - qdu-future/VisionPreview
 === END MANIFEST === */
 // clang-format on
 
