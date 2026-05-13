@@ -44,15 +44,15 @@ constructor_args:
   sync: '@camera_frame_sync'
 template_args:
   - Info:
-      width: 800
-      height: 600
-      step: 2400
+      width: 1280
+      height: 720
+      step: 3840
       encoding: CameraTypes::Encoding::BGR8
-      camera_matrix: [600.0, 0.0, 400.0, 0.0, 600.0, 300.0, 0.0, 0.0, 1.0]
+      camera_matrix: [800.0, 0.0, 640.0, 0.0, 800.0, 360.0, 0.0, 0.0, 1.0]
       distortion_model: CameraTypes::DistortionModel::PLUMB_BOB
       distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
       rectification_matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-      projection_matrix: [600.0, 0.0, 400.0, 0.0, 0.0, 600.0, 300.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+      projection_matrix: [800.0, 0.0, 640.0, 0.0, 0.0, 800.0, 360.0, 0.0, 0.0, 0.0, 1.0, 0.0]
 required_hardware: []
 depends:
   - qdu-future/CameraFrameSync
