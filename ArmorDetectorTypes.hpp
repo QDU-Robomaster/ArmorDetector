@@ -163,7 +163,7 @@ struct ArmorDetectorResult
   double distance_to_image_center{0.0};        ///< 中心到相机主点的像素距离。
   bool pnp_valid{false};                       ///< pose 是否由 PnP 成功求得。
   double pnp_reprojection_error_px{0.0};       ///< PnP 平均重投影误差，单位 px。
-  LibXR::Transform<double> pose{};             ///< 相机坐标系下的装甲板位姿。
+  LibXR::Transform<double> pose{};             ///< OpenCV 相机坐标系 C 下的装甲板位姿。
 };
 
 /**
