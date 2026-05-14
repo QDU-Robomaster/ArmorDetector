@@ -196,7 +196,7 @@ int ArmorDetector<CameraInfoV>::TargetColorFromRobotId(uint8_t robot_id)
  * @brief 处理已经转换为 BGR Mat 的同步帧。
  *
  * 该函数保持 armors_frame 中的 source_frame 指针与当前检测结果同步，随后执行
- * detector 主链路、填充 metrics，并按 armors_frame、armors_result、metrics 的顺序发布。
+ * detector 主链路、填充内部指标，并发布 armors_frame。
  *
  * @tparam CameraInfoV 编译期相机参数。
  * @param img_msg BGR 图像。
@@ -232,7 +232,7 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   const auto detector_finish = std::chrono::steady_clock::now();
 
   FillResultMessage(armors, bgr_img);
-  const auto publish_finish = std::chrono::steady_clock::now();
+  const auto result_finish = std::chrono::steady_clock::now();
 
   ++frame_index_;
   metrics_msg_.frame_index = frame_index_;
@@ -248,15 +248,12 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   metrics_msg_.max_objectness = counters_.max_objectness;
   metrics_msg_.detector_latency_ms =
       std::chrono::duration<double, std::milli>(detector_finish - start_time).count();
-  metrics_msg_.publish_latency_ms =
-      std::chrono::duration<double, std::milli>(publish_finish - detector_finish).count();
+  metrics_msg_.result_latency_ms =
+      std::chrono::duration<double, std::milli>(result_finish - detector_finish).count();
 
   DetectionMessage armors_frame_msg = &armors_frame_packet_;
-  ArmorDetectionsMessage armors_msg = &armors_packet_;
   const LibXR::MicrosecondTimestamp publish_timestamp(image_timestamp_us);
   armors_frame_topic_.Publish(armors_frame_msg, publish_timestamp);
-  armors_topic_.Publish(armors_msg, publish_timestamp);
-  metrics_topic_.Publish(metrics_msg_, publish_timestamp);
   SubmitPreview(bgr_img);
 
   if ((frame_index_ % detail::metrics_log_period) == 0U)
@@ -268,11 +265,11 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
         metrics_msg_.overlap_kept_count, metrics_msg_.semantic_kept_count,
         metrics_msg_.pnp_success_count);
     XR_LOG_INFO(
-        "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f detector_ms=%.3f publish_ms=%.3f",
+        "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f detector_ms=%.3f result_ms=%.3f",
         metrics_msg_.semantic_discard_count,
         metrics_msg_.type_discard_count, metrics_msg_.discarded_count,
         metrics_msg_.max_objectness,
-        metrics_msg_.detector_latency_ms, metrics_msg_.publish_latency_ms);
+        metrics_msg_.detector_latency_ms, metrics_msg_.result_latency_ms);
   }
 }
 
@@ -333,7 +330,7 @@ void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
   }
 
   const ArmorDetectionsPacket detections = armors_packet_;
-  const ArmorDetectorMetrics metrics = metrics_msg_;
+  const FrameMetrics metrics = metrics_msg_;
   preview_.Submit(
       bgr_img,
       [detections, metrics](cv::Mat& canvas)

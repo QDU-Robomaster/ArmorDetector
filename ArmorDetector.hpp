@@ -104,7 +104,7 @@ depends:
  *
  * ArmorDetector 从 CameraFrameSync 读取已经对齐的图像/IMU 帧，执行网络角点检测、
  * 语义过滤、尺寸类型判断和 PnP 位姿求解，最后向 `armor_detector`
- * domain 发布检测结果、带原始帧引用的结果和运行指标。
+ * domain 发布带原始帧引用的检测结果。
  *
  * @tparam CameraInfoV 编译期相机参数，必须与实际图像尺寸、内参和编码一致。
  */
@@ -270,6 +270,28 @@ class ArmorDetector : public LibXR::Application
     uint32_t semantic_discard_count{0};        ///< 语义过滤丢弃数量。
     uint32_t type_discard_count{0};            ///< 类型一致性过滤丢弃数量。
     double max_objectness{0.0};                ///< 本帧最大网络置信度。
+  };
+
+  /**
+   * @brief 单帧 detector 内部运行指标。
+   *
+   * 只用于日志和本模块预览，不作为 topic ABI 发布。
+   */
+  struct FrameMetrics
+  {
+    uint64_t frame_index{0};              ///< detector 处理帧序号。
+    uint64_t image_timestamp_us{0};       ///< 图像帧传感器时间戳，单位 us。
+    uint32_t decoded_count{0};            ///< decoder 保留候选数量。
+    uint32_t overlap_kept_count{0};       ///< 交叠抑制后保留候选数量。
+    uint32_t semantic_kept_count{0};      ///< 语义过滤后保留候选数量。
+    uint32_t armor_count{0};              ///< 最终发布的装甲板数量。
+    uint32_t pnp_success_count{0};        ///< 本帧 PnP 成功数量。
+    uint32_t discarded_count{0};          ///< 后处理丢弃候选总数。
+    uint32_t semantic_discard_count{0};   ///< 语义过滤丢弃数量。
+    uint32_t type_discard_count{0};       ///< 类型一致性过滤丢弃数量。
+    double max_objectness{0.0};           ///< 本帧网络最大目标置信度。
+    double detector_latency_ms{0.0};      ///< 网络检测和候选过滤耗时，单位 ms。
+    double result_latency_ms{0.0};        ///< PnP 和结果填充耗时，单位 ms。
   };
 
   /**
@@ -451,31 +473,19 @@ class ArmorDetector : public LibXR::Application
 
   ArmorDetectionsPacket armors_packet_{}; ///< 复用的检测结果包。
   DetectionPacket armors_frame_packet_{}; ///< 复用的带源帧引用结果包。
-  ArmorDetectorMetrics metrics_msg_{};    ///< 复用的 metrics 消息。
+  FrameMetrics metrics_msg_{};            ///< 复用的内部运行指标。
   std::atomic<int> referee_target_color_{-1}; ///< 动态裁判系统目标颜色，-1 表示未设置。
 
   /**
-   * @brief detector Topic domain。
+   * @brief detector Topic domain，只发布 armors_frame。
    */
   LibXR::Topic::Domain armor_domain_ = LibXR::Topic::Domain("armor_detector");
-
-  /**
-   * @brief 只包含检测结果指针的结果 Topic。
-   */
-  LibXR::Topic armors_topic_ =
-      LibXR::Topic("armors_result", sizeof(ArmorDetectionsMessage), &armor_domain_);
 
   /**
    * @brief 包含检测结果和源同步帧指针的结果 Topic。
    */
   LibXR::Topic armors_frame_topic_ =
       LibXR::Topic("armors_frame", sizeof(DetectionMessage), &armor_domain_);
-
-  /**
-   * @brief detector 运行指标 Topic。
-   */
-  LibXR::Topic metrics_topic_ =
-      LibXR::Topic("metrics", sizeof(ArmorDetectorMetrics), &armor_domain_);
 
   /**
    * @brief 裁判系统主题域。
