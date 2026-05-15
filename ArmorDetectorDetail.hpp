@@ -451,29 +451,23 @@ inline ArmorNumber number_from_model_class_id(int class_id)
     tag = 8;
   }
 
-  int public_number = tag;
-  if (tag >= 1 && tag <= 7)
+  switch (tag)
   {
-    public_number = tag - 1;
-  }
-
-  switch (public_number)
-  {
-    case 0:
-      return ArmorNumber::ONE;
     case 1:
-      return ArmorNumber::TWO;
+      return ArmorNumber::ONE;
     case 2:
-      return ArmorNumber::THREE;
+      return ArmorNumber::TWO;
     case 3:
-      return ArmorNumber::FOUR;
+      return ArmorNumber::THREE;
     case 4:
-      return ArmorNumber::FIVE;
+      return ArmorNumber::FOUR;
     case 5:
-      return ArmorNumber::OUTPOST;
-    case 6:
-      return ArmorNumber::GUARD;
+      return ArmorNumber::FIVE;
     case 7:
+      return ArmorNumber::GUARD;
+    case 8:
+      return ArmorNumber::OUTPOST;
+    case 9:
       return ArmorNumber::BASE;
     default:
       return ArmorNumber::UNKNOWN;
@@ -485,15 +479,15 @@ inline ArmorNumber number_from_model_class_id(int class_id)
  */
 inline ArmorType type_from_model_number(ArmorNumber number)
 {
-  if (number == ArmorNumber::ONE || number == ArmorNumber::TWO)
+  if (!ArmorNumberIsKnown(number))
+  {
+    return ArmorType::INVALID;
+  }
+  if (ArmorNumberIsLarge(number))
   {
     return ArmorType::LARGE;
   }
-  if (ArmorNumberIsKnown(number))
-  {
-    return ArmorType::SMALL;
-  }
-  return ArmorType::INVALID;
+  return ArmorType::SMALL;
 }
 
 }  // namespace armor_detector_detail
