@@ -2,10 +2,10 @@
 
 /**
  * @file ArmorDetectorPipeline.hpp
- * @brief ArmorDetector template implementation aggregator.
+ * @brief ArmorDetector 模板实现包含入口。
  *
- * ArmorDetector.hpp 在类声明之后包含本文件，使各阶段实现保持拆分，同时保留
- * header-only template 实例化能力。
+ * ArmorDetector.hpp 在类声明之后包含本文件，使各阶段实现分文件编写，同时保留
+ * 头文件模板实例化能力。
  */
 
 #include "ArmorDetectorGeometry.hpp"

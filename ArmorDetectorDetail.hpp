@@ -8,7 +8,7 @@
 /**
  * @brief ArmorDetector 内部实现命名空间。
  *
- * 这些工具不构成跨模块 ABI；对外请使用 ArmorDetectorTypes.hpp 中的结果结构。
+ * 这些函数和常量只在 detector 内部使用；对外请使用 ArmorDetectorTypes.hpp 中的结果结构。
  */
 namespace armor_detector_detail
 {
@@ -101,9 +101,8 @@ struct NetworkInputMapping
 /**
  * @brief 当前 detector 20160x22 输出矩阵视图。
  *
- * OpenVINO exposes [1,20160,22] as a 2D [20160,22] Mat in this wrapper. The
- * transposed [22,20160] form is accepted to keep the view tolerant of output
- * adapters that flatten dimensions differently.
+ * OpenVINO 可能把 [1,20160,22] 暴露成 2D 的 [20160,22] 矩阵。这里同时接受
+ * [22,20160] 转置形式，避免不同 OpenVINO 输出展平方式影响解码。
  */
 class ModelOutputView
 {
@@ -174,7 +173,7 @@ inline int ArgMaxOutputRange(const ModelOutputView& output, int row,
 }
 
 /**
- * @brief Numerically stable sigmoid for objectness logits.
+ * @brief 对 objectness logit 执行数值稳定的 sigmoid。
  */
 inline float Sigmoid(float value)
 {
@@ -387,7 +386,7 @@ inline cv::Point2f quad_center(const std::array<cv::Point2f, 4>& points)
 }
 
 /**
- * @brief Bounding box expanded symmetrically by a fraction of its width/height.
+ * @brief 按宽高比例向四周扩张四角点包围盒。
  */
 inline cv::Rect expanded_bounding_rect_from_points(
     const std::array<cv::Point2f, 4>& points, double expand)
@@ -416,8 +415,7 @@ inline cv::Rect expanded_bounding_rect_from_points(
 /**
  * @brief 当前 detector 模型颜色类别映射。
  *
- * Raw 0/1 map to the public blue/red enum. Raw 2/3 are not accepted by the
- * production detector path and must be rejected upstream of candidate publish.
+ * 模型原始类别 0/1 分别对应蓝色和红色。原始类别 2/3 当前不进入正式检测结果。
  */
 inline ArmorColor color_from_model_id(int color_id)
 {

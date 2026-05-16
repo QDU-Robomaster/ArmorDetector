@@ -2,7 +2,7 @@
 
 /**
  * @file ArmorDetectorNumberRefiner.hpp
- * @brief Armor number classifier used as a CPU post-refine stage.
+ * @brief 使用 CPU 执行的装甲板数字 refine 分类器。
  */
 
 #include <algorithm>
@@ -22,27 +22,25 @@ namespace armor_detector_detail
 {
 
 /**
- * @brief CPU-only MLP number classifier wrapper.
+ * @brief 只使用 CPU 的 MLP 数字分类器。
  *
- * The classifier consumes a 20x28 binary digit ROI extracted from the armor
- * quadrilateral using the same light-bar geometry used in the offline
- * cross-check scripts.
+ * 分类器输入为从装甲板四边形中裁出的 `20x28` 二值数字图，裁剪几何与离线检查脚本一致。
  */
 class MlpNumberRefiner
 {
  public:
   struct Prediction
   {
-    bool valid{false};                         ///< Classifier ran successfully.
-    ArmorNumber number{ArmorNumber::UNKNOWN}; ///< Predicted ArmorNumber enum.
-    int label_index{8};                        ///< Raw classifier label index.
-    float confidence{0.0F};                    ///< Softmax confidence.
+    bool valid{false};                         ///< 分类器是否成功输出结果。
+    ArmorNumber number{ArmorNumber::UNKNOWN}; ///< 分类器预测编号。
+    int label_index{8};                        ///< 分类器原始类别下标。
+    float confidence{0.0F};                    ///< softmax 置信度。
   };
 
   /**
-   * @brief Load the ONNX model and force OpenCV DNN CPU execution.
-   * @param model_path MLP number-refine model path.
-   * @return true when the model is ready.
+   * @brief 加载 ONNX 模型并固定使用 OpenCV DNN CPU 推理。
+   * @param model_path MLP 数字 refine 模型路径。
+   * @return 模型可用时返回 true。
    */
   bool Configure(const char* model_path)
   {
@@ -77,7 +75,7 @@ class MlpNumberRefiner
   }
 
   /**
-   * @brief Disable the classifier and release model memory.
+   * @brief 关闭分类器并释放模型。
    */
   void Reset()
   {
@@ -86,16 +84,16 @@ class MlpNumberRefiner
   }
 
   /**
-   * @brief Returns whether the classifier is available.
+   * @brief 判断分类器是否可用。
    */
   [[nodiscard]] bool Ready() const { return ready_; }
 
   /**
-   * @brief Extract the digit ROI and run MLP classification.
-   * @param bgr_img Source BGR image.
-   * @param points Armor corners in top-left, top-right, bottom-right, bottom-left order.
-   * @param type Current armor size type used to select canonical warp width.
-   * @return Prediction with valid=false on extraction or inference failure.
+   * @brief 裁剪数字 ROI 并运行 MLP 分类。
+   * @param bgr_img 源 BGR 图像。
+   * @param points 装甲板四角点，顺序为左上、右上、右下、左下。
+   * @param type 当前装甲板尺寸类型，用于选择透视展开宽度。
+   * @return 裁剪或推理失败时返回 valid=false。
    */
   Prediction Predict(const cv::Mat& bgr_img,
                      const std::array<cv::Point2f, 4>& points,

@@ -2,7 +2,7 @@
 
 /**
  * @file ArmorDetectorTypes.hpp
- * @brief ArmorDetector 对外发布的数据结构、枚举和 Topic payload 类型。
+ * @brief ArmorDetector 对外发布的数据结构、枚举和 Topic 数据类型。
  */
 
 #include <array>
@@ -218,7 +218,7 @@ struct ArmorDetectionsFramePacket
 };
 
 /**
- * @brief armors_frame 的 Topic payload。
+ * @brief armors_frame 的 Topic 数据类型。
  *
  * tracker 必须在回调内同步消费指针。
  *

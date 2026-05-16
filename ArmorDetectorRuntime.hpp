@@ -4,7 +4,7 @@
 
 /**
  * @file ArmorDetectorRuntime.hpp
- * @brief ArmorDetector 配置、同步帧消费线程和帧级运行时 glue。
+ * @brief ArmorDetector 配置、同步帧消费线程和帧级运行时实现。
  */
 
 /**
@@ -124,7 +124,7 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
  * 当前只依赖 RobotGameRefereePack 第一个字段 RobotStatus 的首字节 robot_id。
  *
  * @tparam CameraInfoV 编译期相机参数。
- * @param data 裁判系统摘要包原始 payload。
+ * @param data 裁判系统摘要包原始数据。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::OnRefereeRobotGame(const LibXR::RawData& data)

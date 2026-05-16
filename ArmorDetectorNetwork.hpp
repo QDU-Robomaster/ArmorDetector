@@ -17,7 +17,7 @@ namespace armor_detector_detail
 {
 
 /**
- * @brief OpenVINO armor keypoint network wrapper.
+ * @brief OpenVINO 装甲板关键点网络。
  *
  * 该类只负责模型生命周期和同步推理。输出 tensor 会被包装成 cv::Mat 视图交给
  * detector decoder，视图有效期由本对象保存的 output_tensor_ 保证到下一次
@@ -238,7 +238,7 @@ class OpenVinoArmorNetwork
   }
 
   /**
-   * @brief Check cv::Mat output dimensions against active decoder.
+   * @brief 检查 cv::Mat 输出尺寸是否满足当前解码器约定。
    */
   [[nodiscard]] static bool OutputShapeMatches(const cv::Mat& output)
   {

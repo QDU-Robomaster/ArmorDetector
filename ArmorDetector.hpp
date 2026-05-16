@@ -124,7 +124,7 @@ class ArmorDetector : public LibXR::Application
   using SyncedFrame = typename Sync::SyncedFrame;
   /// 带源帧引用的结果包。
   using DetectionPacket = ArmorDetectionsFramePacket<CameraInfoV>;
-  /// 带源帧引用的 Topic payload。
+  /// 带源帧引用的 Topic 数据类型。
   using DetectionMessage = ArmorDetectionsFrameMessage<CameraInfoV>;
   /**
    * @brief 当前模块实例绑定的编译期相机参数。
@@ -275,7 +275,7 @@ class ArmorDetector : public LibXR::Application
   /**
    * @brief 单帧 detector 内部运行指标。
    *
-   * 只用于日志和本模块预览，不作为 topic ABI 发布。
+   * 只用于日志和本模块预览，不作为 topic 发布。
    */
   struct FrameMetrics
   {
@@ -454,7 +454,7 @@ class ArmorDetector : public LibXR::Application
                          const cv::Mat& bgr_img);
 
   /**
-   * @brief 把当前帧交给轻量预览线程绘制 detector overlay。
+   * @brief 把当前帧交给预览线程绘制检测结果。
    * @param bgr_img 当前 BGR 图像；Submit 内部会立即深拷贝。
    */
   void SubmitPreview(const cv::Mat& bgr_img);
@@ -462,13 +462,13 @@ class ArmorDetector : public LibXR::Application
  private:
   Config cfg_{};                         ///< 当前 detector 配置。
   Sync& sync_;                           ///< 同步帧来源引用。
-  VisionPreview preview_{};              ///< 可选实时预览工具，不参与主链路同步。
+  VisionPreview preview_{};              ///< 可选实时预览。
   ArmorDetectorPnPSolver<CameraInfoV> pnp_solver_{};  ///< 装甲板 PnP 求解器。
   uint64_t latest_timestamp_us_{0};      ///< 最近处理图像的传感器时间戳，单位 us。
   uint64_t frame_index_{0};              ///< 已处理帧计数。
   std::thread sync_frame_thread_{};      ///< 后台同步帧消费线程。
   FrameCounters counters_{};             ///< 当前帧内部计数器。
-  detail::OpenVinoArmorNetwork network_{}; ///< OpenVINO 网络封装。
+  detail::OpenVinoArmorNetwork network_{}; ///< OpenVINO 网络。
   detail::MlpNumberRefiner number_refiner_{}; ///< CPU 数字分类后 refine。
 
   ArmorDetectionsPacket armors_packet_{}; ///< 复用的检测结果包。

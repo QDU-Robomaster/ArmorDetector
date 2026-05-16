@@ -1,87 +1,90 @@
 # ArmorDetector
 
-`ArmorDetector` 从 `CameraFrameSync` 获取同步后的图像帧，调用 OpenVINO
-检测装甲板，并使用相机内参计算每个装甲板在相机坐标系下的位姿。
+`ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用 OpenVINO 模型检测装甲板四角点，再根据相机内参求出装甲板在相机坐标系下的位姿。模块输出会保留当前同步帧引用，供 `ArmorTracker` 在同进程回调里立刻使用。
 
 ## 数据流
 
-1. 读取 `CameraFrameSync<Info>::SyncedFrame`
-2. 将图像缩放到模型要求的尺寸并执行 OpenVINO 推理
-3. 解码候选装甲板，过滤低置信度或几何异常的结果
-4. 对有效结果执行 PnP
-5. 发布带原始帧引用的检测结果
+1. 读取 `CameraFrameSync<Info>::SyncedFrame`。
+2. 将图像缩放到模型输入尺寸，并从 BGR 转成 RGB。
+3. 执行 OpenVINO 推理，解码颜色、编号、置信度和四角点。
+4. 过滤低置信度、颜色不匹配、编号无效或几何异常的候选。
+5. 对有效候选执行 PnP，发布 `armor_detector/armors_frame`。
 
 ## 输入输出
 
-输入:
+输入：
 
 - `CameraFrameSync<Info>::SyncedFrame`
-- 可选 `VisionPreview::RuntimeParam`，只用于本模块实时预览
+- `host/robot_game_ref`，仅在 `referee_auto_detect_color: true` 时订阅
 
-输出:
+输出：
 
-- `armor_detector/armors_frame`: 检测结果和当前同步帧引用
+- `armor_detector/armors_frame`：本帧检测结果、图像时间戳、当前同步帧引用
 
-运行指标只用于本模块日志和预览，不作为 topic 发布。
+`armors_frame` 里的图像和 IMU 指针只在本次回调期间有效。消费模块必须在回调内完成读取，不能跨帧保存这些指针。
 
-默认模型文件:
+## 模型
+
+默认模型文件：
 
 - `model/armor_detector_640x512.onnx`
 - `model/armor_number_mlp.onnx`
 
+主检测模型输入为 `640x512` RGB 图像，输出为 `20160x22` 候选矩阵。候选字段包含 objectness、四角点、颜色和编号类别。解码后会把网络输入坐标映射回原始相机图像坐标。
+
+数字 refine 模型使用 OpenCV DNN CPU 后处理。它只在检测候选已经成立后运行，用数字 ROI 的分类结果覆盖 detector 编号；置信度不够或尺寸类型冲突时不会覆盖。
+
 ## 结果内容
 
-每个装甲板结果包含:
+单个装甲板结果包含：
 
-- 颜色、编号、大小类型和置信度
-- 图像中的包围框、中心点和四个角点
+- 颜色、编号、尺寸类型和置信度
+- 图像包围盒、中心点和四个角点
 - PnP 是否成功
 - PnP 平均重投影误差
-- 相机坐标系下的位姿
+- OpenCV 相机坐标系下的装甲板位姿
 
-`armors_frame` 中的原始图像和 IMU 指针只在同进程回调期间有效，下游模块应在回调内同步消费。
+相机坐标系沿用 OpenCV 约定：`x` 向右，`y` 向下，`z` 向前。这里的位姿只描述装甲板相对相机的位置和朝向，不包含 IMU 姿态融合。
 
 ## 配置
 
-- `detect_color`: `0` 只保留红色，`1` 只保留蓝色，其他值不过滤颜色
-- `referee_auto_detect_color`: 开启后订阅裁判系统摘要包，按本机 `robot_id`
-  动态切换敌方颜色；未收到有效 ID 时仍使用 `detect_color`
-- `referee_domain`: 裁判系统摘要包所在 topic domain，默认 `host`
-- `referee_topic`: 裁判系统摘要包 topic 名，默认 `robot_game_ref`
-- `network.min_confidence`: 最终结果置信度门限
-- `network.logit_threshold`: 网络 objectness 原始 logit 门限
-- `network.nms_threshold`: OpenCV NMS IoU 门限
-- `network.bbox_expand`: NMS 前包围盒扩张比例
-- `network.max_detections`: NMS 后最多保留候选数量
-- `network.enable_quad_check`: 是否启用四边形面积检查
-- `network.min_quad_area_px`: 四边形最小面积，单位为像素平方
-- `network.openvino_device`: `AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`
-- `network.openvino_performance_mode`: `LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`
-- `depth_correction.enabled`: PnP 深度修正总开关，默认关闭；关闭时发布原始 PnP 位姿
-- `depth_correction.camera_normalized_features`: 是否使用相机内参归一化像素特征，默认开启；开启后四边形高度使用 `h/fy`，宽度使用 `w/fx`，重投影误差使用 `err/((fx+fy)/2)`，中心使用 `(x-cx)/fx` 和 `(y-cy)/fy`
-- `depth_correction.coeffs`: 线性深度修正系数，顺序为常数项、`pose_z`、四边形高度特征、四边形宽度特征、PnP 重投影误差特征、四边形中心 x 特征、四边形中心 y 特征
-- `depth_correction.max_abs_correction_m`: 单次 z 修正绝对值上限，单位 m
-- `depth_correction.min_quad_height_px`: 四边形平均高度低于该值时跳过修正
-- `preview.enabled`: detector 实时预览总开关；`false` 时不启动预览线程
-- `preview.preview_window_name`: OpenCV 窗口名
-- `preview.preview_scale`: 显示缩放比例，只影响窗口画面
-- `preview.preview_wait_key_ms`: OpenCV 窗口事件轮询时间，单位 ms
-- `preview.queue_capacity`: 预览队列长度，超过上限时丢弃旧帧
-- `preview.output_mode`: 预览输出模式；`window` 使用 OpenCV 窗口，`raw` / `web` / `http` / `bmp` 使用未压缩 BMP 推流
-- `preview.web_bind_address`: web 监听地址，默认 `0.0.0.0`
-- `preview.web_port`: web 监听端口，默认 `8080`
-- `preview.web_stream_name`: web stream 名，默认 `armor_detector`
-- `preview.max_fps`: 预览最大接受帧率，默认 `30.0`；小于等于 `0` 表示不限频
+- `detect_color`：`0` 只保留红色，`1` 只保留蓝色，其他值不过滤颜色。
+- `referee_auto_detect_color`：按裁判系统 robot_id 自动切换敌方颜色。
+- `referee_domain`：裁判系统摘要包所在 topic domain，默认 `host`。
+- `referee_topic`：裁判系统摘要包 topic 名，默认 `robot_game_ref`。
+- `network.min_confidence`：最终结果置信度门限。
+- `network.logit_threshold`：网络 objectness 原始 logit 门限。
+- `network.nms_threshold`：OpenCV NMS IoU 门限。
+- `network.bbox_expand`：NMS 前包围盒扩张比例。
+- `network.max_detections`：NMS 后最多保留候选数量。
+- `network.enable_quad_check`：是否检查四边形面积和基本形状。
+- `network.min_quad_area_px`：四边形最小面积，单位 `px^2`。
+- `network.openvino_device`：`AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`。
+- `network.openvino_performance_mode`：`LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`。
+- `number_refine.enabled`：是否启用数字 refine。
+- `number_refine.detector_min_confidence`：允许进入数字 refine 的 detector 最低置信度。
+- `number_refine.classifier_min_confidence`：允许覆盖 detector 编号的分类器最低置信度。
+- `number_refine.enforce_type_compatibility`：尺寸类型明确冲突时禁止覆盖编号。
+- `depth_correction.enabled`：是否启用 PnP 深度修正，默认关闭。
+- `depth_correction.camera_normalized_features`：是否使用相机内参归一化像素特征。
+- `depth_correction.coeffs`：线性深度修正系数，顺序为常数项、`pose_z`、四边形高度、四边形宽度、PnP 重投影误差、中心 x、中心 y。
+- `depth_correction.max_abs_correction_m`：单次 z 修正绝对值上限，单位 m。
+- `depth_correction.min_quad_height_px`：四边形平均高度低于该值时跳过修正。
 
-默认设备策略为 `AUTO_DETECT + LATENCY`，按 `NPU -> GPU -> CPU` 顺序选择可用设备。
-CI 使用 `CPU + LATENCY`，保证没有 GPU/NPU 的环境也能构建。
+## 预览
 
-## 边界
+`preview.enabled: true` 时启动实时预览。预览只显示本模块当前帧结果叠加，不录像、不写数据文件。
 
-- 模块只在 `preview.enabled: true` 时启动实时预览。
-- 预览只显示当前 detector overlay，不订阅 topic、不录像、不写 TSV。
-- 深度修正只改相机坐标系下的 z，不改角点、旋转或 x/y。
-- 线性深度修正系数需要用对应相机、模型、场景数据重新标定；不要把裸像素系数跨相机复用。
-- 原始视频、同步数据和回放包落盘由相机/同步模块负责，不放在 detector 里。
-- 相机参数来自模板参数 `Info`，必须与实际图像尺寸、编码、内参和畸变参数一致。
-- 相机帧可以是实际采集尺寸；处理前按模型要求缩放。decoder 将网络输出坐标映射回相机图像。
+- `preview.output_mode: window` 使用 OpenCV 窗口。
+- `preview.output_mode: raw` / `web` / `http` / `bmp` 使用 BMP web 推流。
+- `preview.web_bind_address` 默认 `0.0.0.0`。
+- `preview.web_port` 默认 `8080`。
+- `preview.web_stream_name` 默认 `armor_detector`，直接取流路径为 `/stream/armor_detector`。
+- `preview.max_fps` 默认 `30.0`；小于等于 `0` 表示不限频。
+
+## 使用要求
+
+- `Info` 里的图像尺寸、`step`、编码、内参和畸变参数必须与实际相机输出一致。
+- 当前主检测模型固定使用 `640x512` 输入；原始图像可以是其他尺寸。
+- 深度修正系数必须用对应相机、模型和场景数据重新标定，不能跨相机直接复用裸像素系数。
+- 原始视频、同步数据和回放包由相机或采集模块保存，不在 `ArmorDetector` 中落盘。
