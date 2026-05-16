@@ -476,4 +476,7 @@ class ArmorDetector : public LibXR::Application
   LibXR::Topic::Callback referee_callback_ = LibXR::Topic::Callback();
 };
 
-#include "ArmorDetectorPipeline.hpp"
+#include "ArmorDetectorGeometry.hpp"
+#include "ArmorDetectorRuntime.hpp"
+#include "ArmorDetectorInference.hpp"
+#include "ArmorDetectorPublish.hpp"
