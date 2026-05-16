@@ -65,11 +65,6 @@
 - `number_refine.detector_min_confidence`：允许进入数字 refine 的 detector 最低置信度。
 - `number_refine.classifier_min_confidence`：允许覆盖 detector 编号的分类器最低置信度。
 - `number_refine.enforce_type_compatibility`：尺寸类型明确冲突时禁止覆盖编号。
-- `depth_correction.enabled`：是否启用 PnP 深度修正，默认关闭。
-- `depth_correction.camera_normalized_features`：是否使用相机内参归一化像素特征。
-- `depth_correction.coeffs`：线性深度修正系数，顺序为常数项、`pose_z`、四边形高度、四边形宽度、PnP 重投影误差、中心 x、中心 y。
-- `depth_correction.max_abs_correction_m`：单次 z 修正绝对值上限，单位 m。
-- `depth_correction.min_quad_height_px`：四边形平均高度低于该值时跳过修正。
 
 ## 预览
 
@@ -86,5 +81,4 @@
 
 - `Info` 里的图像尺寸、`step`、编码、内参和畸变参数必须与实际相机输出一致。
 - 当前主检测模型固定使用 `640x512` 输入；原始图像可以是其他尺寸。
-- 深度修正系数必须用对应相机、模型和场景数据重新标定，不能跨相机直接复用裸像素系数。
 - 原始视频、同步数据和回放包由相机或采集模块保存，不在 `ArmorDetector` 中落盘。
