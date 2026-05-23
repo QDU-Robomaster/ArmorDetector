@@ -36,7 +36,7 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
     const char* topic_name = cfg_.referee_topic;
     if (topic_name == nullptr || topic_name[0] == '\0')
     {
-      topic_name = "robot_game_ref";
+      topic_name = "sentry_ref";
     }
 
     referee_domain_ = LibXR::Topic::Domain(domain_name);
