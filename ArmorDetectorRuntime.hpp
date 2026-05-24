@@ -224,6 +224,12 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   const auto detector_finish = std::chrono::steady_clock::now();
 
   FillResultMessage(armors, bgr_img);
+  armors_packet_.results.erase(
+      std::remove_if(
+          armors_packet_.results.begin(), armors_packet_.results.end(),
+          [](const ArmorDetectorResult& armor)
+          { return armor.number == ArmorNumber::OUTPOST; }),
+      armors_packet_.results.end());
   const auto result_finish = std::chrono::steady_clock::now();
 
   ++frame_index_;
