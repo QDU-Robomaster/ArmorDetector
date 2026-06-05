@@ -21,6 +21,7 @@
 #include <variant>
 #include <vector>
 
+#include <Eigen/Dense>
 #include <opencv2/core.hpp>
 
 #include "infer/ArmorDetectorModelAdapter.hpp"
@@ -659,31 +660,31 @@ class ArmorDetectorNetwork
             output.release();
             return false;
           }
-          float* dst = output.ptr<float>(row++);
+          Eigen::Map<Eigen::Array<float, 1, detail::int16_output_width>> dst(
+              output.ptr<float>(row++));
           const size_t anchor_offset =
               cell_offset +
               static_cast<size_t>(anchor * HailortOutputFieldCount());
-          for (int point_index = 0; point_index < 4; ++point_index)
+          const auto point_block =
+              LoadQuantizedBlock<8>(storage.data() + anchor_offset, quant_infos, 0);
+          Eigen::Array<float, 1, 8> rounded_points = point_block;
+          for (int index = 0; index < 8; ++index)
           {
-            const int x_index = point_index * 2;
-            const int y_index = x_index + 1;
-            const float src_x =
-                RoundToTailInputPrecision(
-                    LoadHailoValue(storage,
-                                   anchor_offset + static_cast<size_t>(x_index),
-                                   quant_infos, x_index));
-            const float src_y =
-                RoundToTailInputPrecision(
-                    LoadHailoValue(storage,
-                                   anchor_offset + static_cast<size_t>(y_index),
-                                   quant_infos, y_index));
-            dst[x_index] =
-                src_x * anchor_mul[anchor][x_index] +
-                static_cast<float>(x) * stride_x;
-            dst[y_index] =
-                src_y * anchor_mul[anchor][y_index] +
-                static_cast<float>(y) * stride_y;
+            rounded_points(index) = RoundToTailInputPrecision(rounded_points(index));
           }
+          Eigen::Map<const Eigen::Array<float, 1, 8>> anchor_scale(
+              anchor_mul[anchor].data());
+          Eigen::Array<float, 1, 8> grid_offset;
+          grid_offset << static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y,
+              static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y,
+              static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y,
+              static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y;
+          dst.segment(0, 8) = rounded_points * anchor_scale + grid_offset;
+
           for (int field = 8; field < HailortOutputFieldCount(); ++field)
           {
             dst[field] =
@@ -718,10 +719,45 @@ class ArmorDetectorNetwork
     return DequantizeValue(storage[index], qi);
   }
 
+  template <int N, typename T>
+  Eigen::Array<float, 1, N> LoadQuantizedBlock(const T* source,
+                                               const std::vector<hailo_quant_info_t>& quant_infos,
+                                               int feature_offset) const
+  {
+    Eigen::Array<float, 1, N> block;
+    if (quant_infos.empty())
+    {
+      for (int index = 0; index < N; ++index)
+      {
+        block(index) = static_cast<float>(source[index]);
+      }
+      return block;
+    }
+
+    if (quant_infos.size() == 1U)
+    {
+      const auto& qi = quant_infos.front();
+      for (int index = 0; index < N; ++index)
+      {
+        block(index) = DequantizeValue(source[index], qi);
+      }
+      return block;
+    }
+
+    for (int index = 0; index < N; ++index)
+    {
+      const auto& qi =
+          quant_infos[static_cast<std::size_t>(feature_offset + index) %
+                      quant_infos.size()];
+      block(index) = DequantizeValue(source[index], qi);
+    }
+    return block;
+  }
+
   template <typename T>
   bool CopySingleInt8OutputToMatrix(const std::vector<T>& storage,
-                                   const std::vector<hailo_quant_info_t>& quant_infos,
-                                   cv::Mat& output) const
+                                    const std::vector<hailo_quant_info_t>& quant_infos,
+                                    cv::Mat& output) const
   {
     output.create(detail::int8_output_width, detail::int8_candidate_count, CV_32F);
     if (storage.size() < static_cast<size_t>(detail::int8_output_width *
@@ -734,14 +770,33 @@ class ArmorDetectorNetwork
       return false;
     }
 
-    size_t index = 0;
+    Eigen::Map<detail::RowMajorArrayXXf> output_matrix(
+        output.ptr<float>(), detail::int8_output_width,
+        detail::int8_candidate_count);
+    Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>
+        source_matrix(storage.data(), detail::int8_output_width,
+                      detail::int8_candidate_count);
+
+    if (quant_infos.empty())
+    {
+      output_matrix = source_matrix.template cast<float>().array();
+      return true;
+    }
+
+    if (quant_infos.size() == 1U)
+    {
+      const auto& qi = quant_infos.front();
+      output_matrix =
+          (source_matrix.template cast<float>().array() - qi.qp_zp) * qi.qp_scale;
+      return true;
+    }
+
     for (int row = 0; row < detail::int8_output_width; ++row)
     {
-      float* dst = output.ptr<float>(row);
-      for (int col = 0; col < detail::int8_candidate_count; ++col, ++index)
-      {
-        dst[col] = LoadQuantizedValue(storage, index, quant_infos, row);
-      }
+      const auto& qi = quant_infos[static_cast<std::size_t>(row) % quant_infos.size()];
+      output_matrix.row(row) =
+          (source_matrix.row(row).template cast<float>().array() - qi.qp_zp) *
+          qi.qp_scale;
     }
     return true;
   }
@@ -782,6 +837,9 @@ class ArmorDetectorNetwork
     const auto& q16_p5 = buffers.at(kInt8HostTailOutputNames[5]).quant_infos;
 
     output.create(detail::int8_candidate_count, detail::int8_output_width, CV_32F);
+    Eigen::Map<detail::RowMajorArrayXXf> output_matrix(
+        output.ptr<float>(), detail::int8_candidate_count,
+        detail::int8_output_width);
     constexpr int widths[3] = {80, 40, 20};
     constexpr int heights[3] = {64, 32, 16};
     constexpr int strides[3] = {8, 16, 32};
@@ -808,38 +866,30 @@ class ArmorDetectorNetwork
             output.release();
             return false;
           }
-          float* dst = output.ptr<float>(row++);
+          auto dst = output_matrix.row(row++);
           const size_t cell8 = (static_cast<size_t>(y) * static_cast<size_t>(width) +
                                 static_cast<size_t>(x)) * 8U;
           const size_t cell16 = (static_cast<size_t>(y) * static_cast<size_t>(width) +
                                  static_cast<size_t>(x)) * 16U;
-          for (int field = 0; field < 8; ++field)
-          {
-            dst[field] = LoadQuantizedValue(*conv8, cell8 + static_cast<size_t>(field), q8, field);
-          }
-          dst[8] = LoadQuantizedValue(*concat16_tensor, cell16 + 0U, q16, 0);
-          dst[17] = LoadQuantizedValue(*concat16_tensor, cell16 + 1U, q16, 1);
-          dst[18] = LoadQuantizedValue(*concat16_tensor, cell16 + 2U, q16, 2);
-          dst[9] = LoadQuantizedValue(*concat16_tensor, cell16 + 4U, q16, 4);
-          dst[10] = LoadQuantizedValue(*concat16_tensor, cell16 + 5U, q16, 5);
-          dst[11] = LoadQuantizedValue(*concat16_tensor, cell16 + 6U, q16, 6);
-          dst[12] = LoadQuantizedValue(*concat16_tensor, cell16 + 7U, q16, 7);
-          dst[13] = LoadQuantizedValue(*concat16_tensor, cell16 + 8U, q16, 8);
-          dst[14] = LoadQuantizedValue(*concat16_tensor, cell16 + 9U, q16, 9);
-          dst[15] = LoadQuantizedValue(*concat16_tensor, cell16 + 10U, q16, 10);
-          dst[16] = LoadQuantizedValue(*concat16_tensor, cell16 + 11U, q16, 11);
-          dst[19] = LoadQuantizedValue(*concat16_tensor, cell16 + 12U, q16, 12);
-          dst[20] = LoadQuantizedValue(*concat16_tensor, cell16 + 13U, q16, 13);
+          const auto conv8_block =
+              LoadQuantizedBlock<8>(conv8->data() + cell8, q8, 0);
+          const auto concat16_block =
+              LoadQuantizedBlock<16>(concat16_tensor->data() + cell16, q16, 0);
+          dst.setZero();
+          dst.segment(0, 8) = conv8_block;
+          dst(8) = concat16_block(0);
+          dst(17) = concat16_block(1);
+          dst(18) = concat16_block(2);
+          dst.segment(9, 8) = concat16_block.segment(4, 8);
+          dst.segment(19, 2) = concat16_block.segment(12, 2);
 
-          for (int point = 0; point < 4; ++point)
-          {
-            dst[point * 2] =
-                dst[point * 2] * static_cast<float>(stride * 2) +
-                static_cast<float>(x * stride);
-            dst[point * 2 + 1] =
-                dst[point * 2 + 1] * static_cast<float>(stride * 2) +
-                static_cast<float>(y * stride);
-          }
+          Eigen::Array<float, 1, 8> grid_offset;
+          grid_offset << static_cast<float>(x * stride), static_cast<float>(y * stride),
+              static_cast<float>(x * stride), static_cast<float>(y * stride),
+              static_cast<float>(x * stride), static_cast<float>(y * stride),
+              static_cast<float>(x * stride), static_cast<float>(y * stride);
+          dst.segment(0, 8) =
+              dst.segment(0, 8) * static_cast<float>(stride * 2) + grid_offset;
         }
       }
     }
@@ -1046,31 +1096,30 @@ class ArmorDetectorNetwork
           const size_t anchor_offset =
               cell_offset +
               static_cast<size_t>(anchor * HailortOutputFieldCount());
-          std::array<float, detail::int16_output_width> fields{};
-          for (int point_index = 0; point_index < 4; ++point_index)
+          Eigen::Array<float, 1, detail::int16_output_width> fields;
+          fields.setZero();
+          const auto point_block =
+              LoadQuantizedBlock<8>(storage.data() + anchor_offset, quant_infos, 0);
+          Eigen::Array<float, 1, 8> rounded_points = point_block;
+          for (int index = 0; index < 8; ++index)
           {
-            const int x_index = point_index * 2;
-            const int y_index = x_index + 1;
-            const float src_x =
-                RoundToTailInputPrecision(
-                    LoadHailoValue(storage,
-                                   anchor_offset + static_cast<size_t>(x_index),
-                                   quant_infos, x_index));
-            const float src_y =
-                RoundToTailInputPrecision(
-                    LoadHailoValue(storage,
-                                   anchor_offset + static_cast<size_t>(y_index),
-                                   quant_infos, y_index));
-            fields[static_cast<size_t>(x_index)] =
-                src_x * anchor_mul[anchor][x_index] +
-                static_cast<float>(x) * stride_x;
-            fields[static_cast<size_t>(y_index)] =
-                src_y * anchor_mul[anchor][y_index] +
-                static_cast<float>(y) * stride_y;
+            rounded_points(index) = RoundToTailInputPrecision(rounded_points(index));
           }
+          Eigen::Map<const Eigen::Array<float, 1, 8>> anchor_scale(
+              anchor_mul[anchor].data());
+          Eigen::Array<float, 1, 8> grid_offset;
+          grid_offset << static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y,
+              static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y,
+              static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y,
+              static_cast<float>(x) * stride_x,
+              static_cast<float>(y) * stride_y;
+          fields.segment(0, 8) = rounded_points * anchor_scale + grid_offset;
           for (int field = 8; field < HailortOutputFieldCount(); ++field)
           {
-            fields[static_cast<size_t>(field)] =
+            fields(field) =
                 RoundToTailInputPrecision(
                     LoadHailoValue(storage,
                                    anchor_offset + static_cast<size_t>(field),
@@ -1080,7 +1129,7 @@ class ArmorDetectorNetwork
           auto detection = build_detection(
               [&fields](int field)
               {
-                return fields[static_cast<size_t>(field)];
+                return fields(field);
               });
           if (detection.has_value())
           {

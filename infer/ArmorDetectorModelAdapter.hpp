@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 
+#include <Eigen/Dense>
 #include <opencv2/core.hpp>
 
 #include "infer/ArmorDetectorInt16Model.hpp"
@@ -44,12 +45,27 @@ inline std::array<PointT, 4> canonicalize_points(
     const ModelInferAdapter& adapter,
     const std::array<PointT, 4>& declared_points)
 {
-  return {
-      declared_points[static_cast<std::size_t>(adapter.canonical_point_order[0])],
-      declared_points[static_cast<std::size_t>(adapter.canonical_point_order[1])],
-      declared_points[static_cast<std::size_t>(adapter.canonical_point_order[2])],
-      declared_points[static_cast<std::size_t>(adapter.canonical_point_order[3])],
-  };
+  Eigen::Array<float, 4, 2, Eigen::RowMajor> point_matrix;
+  for (int index = 0; index < 4; ++index)
+  {
+    point_matrix(index, 0) = declared_points[static_cast<std::size_t>(index)].x;
+    point_matrix(index, 1) = declared_points[static_cast<std::size_t>(index)].y;
+  }
+
+  Eigen::Array<float, 4, 2, Eigen::RowMajor> canonical_matrix;
+  for (int index = 0; index < 4; ++index)
+  {
+    canonical_matrix.row(index) = point_matrix.row(
+        adapter.canonical_point_order[static_cast<std::size_t>(index)]);
+  }
+
+  std::array<PointT, 4> canonical_points{};
+  for (int index = 0; index < 4; ++index)
+  {
+    canonical_points[static_cast<std::size_t>(index)] =
+        PointT(canonical_matrix(index, 0), canonical_matrix(index, 1));
+  }
+  return canonical_points;
 }
 
 }  // namespace armor_detector_infer

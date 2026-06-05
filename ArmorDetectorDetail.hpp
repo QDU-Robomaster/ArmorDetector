@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include <Eigen/Dense>
+
 #include "infer/ArmorDetectorModelRegistry.hpp"
 
 /**
@@ -16,6 +18,12 @@
  */
 namespace armor_detector_detail
 {
+
+using RowMajorMatrixXf =
+    Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+using RowMajorArrayXXf =
+    Eigen::Array<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+using PointMatrix4x2f = Eigen::Array<float, 4, 2, Eigen::RowMajor>;
 
 /**
  * @brief 当前 detector 模型输入宽度，单位 px。
@@ -156,11 +164,37 @@ class ModelOutputView
 
   [[nodiscard]] float At(int row, int field) const
   {
-    return transposed_ ? output_.at<float>(field, row)
-                       : output_.at<float>(row, field);
+    const auto mapped = MatrixMap();
+    return transposed_ ? mapped(field, row) : mapped(row, field);
+  }
+
+  [[nodiscard]] int ArgMaxRange(int row, int begin, int end) const
+  {
+    const auto mapped = MatrixMap();
+    Eigen::Index index = 0;
+    const Eigen::Index length = static_cast<Eigen::Index>(end - begin);
+    if (transposed_)
+    {
+      mapped.block(static_cast<Eigen::Index>(begin),
+                   static_cast<Eigen::Index>(row), length, 1)
+          .maxCoeff(&index);
+    }
+    else
+    {
+      mapped.row(static_cast<Eigen::Index>(row))
+          .segment(static_cast<Eigen::Index>(begin), length)
+          .maxCoeff(&index);
+    }
+    return static_cast<int>(index);
   }
 
  private:
+  [[nodiscard]] Eigen::Map<const RowMajorMatrixXf> MatrixMap() const
+  {
+    return Eigen::Map<const RowMajorMatrixXf>(
+        output_.ptr<float>(), output_.rows, output_.cols);
+  }
+
   const cv::Mat& output_;
   int candidate_count_{0};
   int output_width_{0};
@@ -203,12 +237,7 @@ inline int ArgMaxFieldRange(FieldReader&& read, int begin, int end)
 inline int ArgMaxOutputRange(const ModelOutputView& output, int row,
                              int begin, int end)
 {
-  return ArgMaxFieldRange(
-      [&output, row](int index)
-      {
-        return output.At(row, index);
-      },
-      begin, end);
+  return output.ArgMaxRange(row, begin, end);
 }
 
 /**
@@ -407,7 +436,14 @@ inline LibXR::Transform<double> make_pose(const cv::Mat& rvec, const cv::Mat& tv
  */
 inline cv::Point2f quad_center(const std::array<cv::Point2f, 4>& points)
 {
-  return (points[0] + points[1] + points[2] + points[3]) * 0.25F;
+  PointMatrix4x2f point_matrix;
+  for (int index = 0; index < 4; ++index)
+  {
+    point_matrix(index, 0) = points[static_cast<std::size_t>(index)].x;
+    point_matrix(index, 1) = points[static_cast<std::size_t>(index)].y;
+  }
+  const Eigen::Array2f center = point_matrix.colwise().mean();
+  return {center(0), center(1)};
 }
 
 /**
