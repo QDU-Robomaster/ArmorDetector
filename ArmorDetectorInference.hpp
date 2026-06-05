@@ -180,7 +180,7 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   std::vector<NetworkDetection> detections;
 
   const auto family =
-      detail::resolve_detector_model_or_default(cfg_.network.model_name).family;
+      detail::resolve_detector_model_or_default(cfg_.network.model).family;
   const int candidate_count =
       family == detail::ModelFamily::SKD ? detail::skd_candidate_count
                                          : detail::model_candidate_count;
@@ -441,7 +441,7 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
     int field_count) const
 {
   const auto family =
-      detail::resolve_detector_model_or_default(cfg_.network.model_name).family;
+      detail::resolve_detector_model_or_default(cfg_.network.model).family;
   const float objectness_logit = read(8);
   const double logit_threshold =
       cfg_.network.logit_threshold > 0.0

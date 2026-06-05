@@ -72,18 +72,18 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   preview_.Start(cfg_.preview);
 
   const auto* resolved_model =
-      detail::resolve_detector_model(cfg_.network.model_name);
-  if (cfg_.network.model_name != nullptr &&
-      cfg_.network.model_name[0] != '\0' &&
+      detail::resolve_detector_model(cfg_.network.model);
+  if (cfg_.network.model != nullptr &&
+      cfg_.network.model[0] != '\0' &&
       resolved_model == nullptr)
   {
     XR_LOG_ERROR(
-        "ArmorDetector unknown model_name=%s, fallback to default %s",
-        cfg_.network.model_name,
-        detail::default_detector_model_name);
+        "ArmorDetector unknown model=%s, fallback to default %s",
+        cfg_.network.model,
+        detail::default_detector_model);
   }
   const auto& resolved =
-      detail::resolve_detector_model_or_default(cfg_.network.model_name);
+      detail::resolve_detector_model_or_default(cfg_.network.model);
 
   const char* model_family =
       detail::model_family_name(resolved.family);
@@ -95,7 +95,7 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   const char* hailort_tail_onnx_path = resolved.hailort_tail_onnx_path;
 
   XR_LOG_INFO(
-      "ArmorDetector model_name=%s family=%s backend=%s model_path=%s hef_path=%s tail_onnx=%s",
+      "ArmorDetector model=%s family=%s backend=%s model_path=%s hef_path=%s tail_onnx=%s",
       resolved.canonical_name,
       model_family, backend_name, model_path, hailort_hef_path,
       hailort_tail_onnx_path);

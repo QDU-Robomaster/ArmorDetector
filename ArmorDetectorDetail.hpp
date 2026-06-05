@@ -112,7 +112,7 @@ inline const char* model_family_name(ModelFamily family)
   return family == ModelFamily::SKD ? "SKD" : "SZU";
 }
 
-enum class DetectorModelName : uint8_t
+enum class DetectorModelId : uint8_t
 {
   INT8_HEAD_L = 0,
   INT8_GRID_L = 1,
@@ -122,12 +122,12 @@ enum class DetectorModelName : uint8_t
   INT16_HEAD = 5,
 };
 
-constexpr const char* default_detector_model_name = "int16-head-l";
+constexpr const char* default_detector_model = "int16-head-l";
 
 struct ResolvedDetectorModel
 {
   const char* canonical_name{""};
-  DetectorModelName model_name{DetectorModelName::INT16_HEAD_L};
+  DetectorModelId model_id{DetectorModelId::INT16_HEAD_L};
   ModelFamily family{ModelFamily::SZU};
   const char* forced_backend{"HAILORT"};
   const char* openvino_model_path{""};
@@ -145,7 +145,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
   static const ResolvedDetectorModel kVariants[] = {
       {
           "int8-head-l",
-          DetectorModelName::INT8_HEAD_L,
+          DetectorModelId::INT8_HEAD_L,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -154,7 +154,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int8-grid-l",
-          DetectorModelName::INT8_GRID_L,
+          DetectorModelId::INT8_GRID_L,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -163,7 +163,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int16-head-l",
-          DetectorModelName::INT16_HEAD_L,
+          DetectorModelId::INT16_HEAD_L,
           ModelFamily::SZU,
           "HAILORT",
           ARMOR_DETECTOR_MODEL_PATH,
@@ -172,7 +172,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int8-head",
-          DetectorModelName::INT8_HEAD,
+          DetectorModelId::INT8_HEAD,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -181,7 +181,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int8-grid",
-          DetectorModelName::INT8_GRID,
+          DetectorModelId::INT8_GRID,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -190,7 +190,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int16-head",
-          DetectorModelName::INT16_HEAD,
+          DetectorModelId::INT16_HEAD,
           ModelFamily::SZU,
           "HAILORT",
           ARMOR_DETECTOR_MODEL_PATH,
@@ -218,7 +218,7 @@ inline const ResolvedDetectorModel& resolve_detector_model_or_default(
   {
     return *resolved;
   }
-  const auto* fallback = resolve_detector_model(default_detector_model_name);
+  const auto* fallback = resolve_detector_model(default_detector_model);
   return *fallback;
 }
 
