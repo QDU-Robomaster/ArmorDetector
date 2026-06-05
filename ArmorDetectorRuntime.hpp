@@ -71,16 +71,13 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   preview_.Stop();
   preview_.Start(cfg_.preview);
 
-  const auto* resolved_model =
-      detail::resolve_detector_model(cfg_.network.model);
-  if (cfg_.network.model != nullptr &&
-      cfg_.network.model[0] != '\0' &&
-      resolved_model == nullptr)
+  const auto* resolved_model = detail::resolve_detector_model(cfg_.network.model);
+  if (resolved_model == nullptr)
   {
     XR_LOG_ERROR(
-        "ArmorDetector unknown model=%s, fallback to default %s",
-        cfg_.network.model,
-        detail::default_detector_model);
+        "ArmorDetector unknown model enum=%u, fallback to default %s",
+        static_cast<unsigned>(cfg_.network.model),
+        detail::detector_model_name(detail::default_detector_model));
   }
   const auto& resolved =
       detail::resolve_detector_model_or_default(cfg_.network.model);

@@ -7,7 +7,7 @@ constructor_args:
   cfg:
     detect_color: 1
     network:
-      model: "int16-head-l"
+      model: ArmorDetectorModel::INT16_HEAD_L
       min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
@@ -147,8 +147,8 @@ class ArmorDetector : public LibXR::Application
    */
   struct NetworkParams
   {
-    /// 固定模型名：int8-head-l / int8-grid-l / int16-head-l / int8-head / int8-grid / int16-head。
-    const char* model{"int16-head-l"};
+    /// 固定模型枚举：INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT8_HEAD / INT8_GRID / INT16_HEAD。
+    ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。

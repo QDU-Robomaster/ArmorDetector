@@ -1,9 +1,21 @@
 #pragma once
 
+#include <cstdint>
+
 /**
  * @file ArmorDetectorDetail.hpp
  * @brief ArmorDetector 内部使用的模型常量和轻量几何/语义工具。
  */
+
+enum class ArmorDetectorModel : uint8_t
+{
+  INT8_HEAD_L = 0,
+  INT8_GRID_L = 1,
+  INT16_HEAD_L = 2,
+  INT8_HEAD = 3,
+  INT8_GRID = 4,
+  INT16_HEAD = 5,
+};
 
 /**
  * @brief ArmorDetector 内部实现命名空间。
@@ -112,22 +124,33 @@ inline const char* model_family_name(ModelFamily family)
   return family == ModelFamily::SKD ? "SKD" : "SZU";
 }
 
-enum class DetectorModelId : uint8_t
+inline const char* detector_model_name(ArmorDetectorModel model)
 {
-  INT8_HEAD_L = 0,
-  INT8_GRID_L = 1,
-  INT16_HEAD_L = 2,
-  INT8_HEAD = 3,
-  INT8_GRID = 4,
-  INT16_HEAD = 5,
-};
+  switch (model)
+  {
+    case ArmorDetectorModel::INT8_HEAD_L:
+      return "int8-head-l";
+    case ArmorDetectorModel::INT8_GRID_L:
+      return "int8-grid-l";
+    case ArmorDetectorModel::INT16_HEAD_L:
+      return "int16-head-l";
+    case ArmorDetectorModel::INT8_HEAD:
+      return "int8-head";
+    case ArmorDetectorModel::INT8_GRID:
+      return "int8-grid";
+    case ArmorDetectorModel::INT16_HEAD:
+      return "int16-head";
+    default:
+      return "int16-head-l";
+  }
+}
 
-constexpr const char* default_detector_model = "int16-head-l";
+constexpr ArmorDetectorModel default_detector_model = ArmorDetectorModel::INT16_HEAD_L;
 
 struct ResolvedDetectorModel
 {
   const char* canonical_name{""};
-  DetectorModelId model_id{DetectorModelId::INT16_HEAD_L};
+  ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
   ModelFamily family{ModelFamily::SZU};
   const char* forced_backend{"HAILORT"};
   const char* openvino_model_path{""};
@@ -135,17 +158,12 @@ struct ResolvedDetectorModel
   const char* hailort_tail_onnx_path{""};
 };
 
-inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
+inline const ResolvedDetectorModel* resolve_detector_model(ArmorDetectorModel model)
 {
-  if (name == nullptr || name[0] == '\0')
-  {
-    return nullptr;
-  }
-
   static const ResolvedDetectorModel kVariants[] = {
       {
           "int8-head-l",
-          DetectorModelId::INT8_HEAD_L,
+          ArmorDetectorModel::INT8_HEAD_L,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -154,7 +172,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int8-grid-l",
-          DetectorModelId::INT8_GRID_L,
+          ArmorDetectorModel::INT8_GRID_L,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -163,7 +181,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int16-head-l",
-          DetectorModelId::INT16_HEAD_L,
+          ArmorDetectorModel::INT16_HEAD_L,
           ModelFamily::SZU,
           "HAILORT",
           ARMOR_DETECTOR_MODEL_PATH,
@@ -172,7 +190,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int8-head",
-          DetectorModelId::INT8_HEAD,
+          ArmorDetectorModel::INT8_HEAD,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -181,7 +199,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int8-grid",
-          DetectorModelId::INT8_GRID,
+          ArmorDetectorModel::INT8_GRID,
           ModelFamily::SKD,
           "HAILORT",
           ARMOR_DETECTOR_SKD_MODEL_PATH,
@@ -190,7 +208,7 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
       {
           "int16-head",
-          DetectorModelId::INT16_HEAD,
+          ArmorDetectorModel::INT16_HEAD,
           ModelFamily::SZU,
           "HAILORT",
           ARMOR_DETECTOR_MODEL_PATH,
@@ -199,21 +217,29 @@ inline const ResolvedDetectorModel* resolve_detector_model(const char* name)
       },
   };
 
-  const std::string variant(name);
-  for (const auto& item : kVariants)
+  switch (model)
   {
-    if (variant == item.canonical_name)
-    {
-      return &item;
-    }
+    case ArmorDetectorModel::INT8_HEAD_L:
+      return &kVariants[0];
+    case ArmorDetectorModel::INT8_GRID_L:
+      return &kVariants[1];
+    case ArmorDetectorModel::INT16_HEAD_L:
+      return &kVariants[2];
+    case ArmorDetectorModel::INT8_HEAD:
+      return &kVariants[3];
+    case ArmorDetectorModel::INT8_GRID:
+      return &kVariants[4];
+    case ArmorDetectorModel::INT16_HEAD:
+      return &kVariants[5];
+    default:
+      return nullptr;
   }
-  return nullptr;
 }
 
 inline const ResolvedDetectorModel& resolve_detector_model_or_default(
-    const char* name)
+    ArmorDetectorModel model)
 {
-  const auto* resolved = resolve_detector_model(name);
+  const auto* resolved = resolve_detector_model(model);
   if (resolved != nullptr)
   {
     return *resolved;

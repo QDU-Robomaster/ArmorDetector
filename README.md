@@ -34,14 +34,14 @@
 
 数字 refine 模型使用 OpenCV DNN CPU 后处理。它只在检测候选已经成立后运行，用数字 ROI 的分类结果覆盖 detector 编号；置信度不够或尺寸类型冲突时不会覆盖。
 
-Hailo 路线现在只通过固定 `model` 选择。当前临时接受的 `6` 个名字是：
+Hailo 路线现在只通过固定 `network.model` 枚举选择。当前临时接受的 `6` 个枚举值是：
 
-- `int8-head-l`
-- `int8-grid-l`
-- `int16-head-l`
-- `int8-head`
-- `int8-grid`
-- `int16-head`
+- `ArmorDetectorModel::INT8_HEAD_L`
+- `ArmorDetectorModel::INT8_GRID_L`
+- `ArmorDetectorModel::INT16_HEAD_L`
+- `ArmorDetectorModel::INT8_HEAD`
+- `ArmorDetectorModel::INT8_GRID`
+- `ArmorDetectorModel::INT16_HEAD`
 
 这些变体都已经映射到模块目录下的稳定工件文件名：
 
@@ -54,9 +54,9 @@ Hailo 路线现在只通过固定 `model` 选择。当前临时接受的 `6` 个
 
 其中：
 
-- `int8-head*`：`int8` 六输出 host-tail 语义
-- `int8-grid*`：`int8` 单输出 `21x6720` 语义
-- `int16-head*`：`int16` 三头 `conv47/54/60` 语义
+- `INT8_HEAD*`：`int8` 六输出 host-tail 语义
+- `INT8_GRID*`：`int8` 单输出 `21x6720` 语义
+- `INT16_HEAD*`：`int16` 三头 `conv47/54/60` 语义
 
 `int16-box*` 当前不在接受集合里，不建议配置进当前 detector。
 
@@ -85,7 +85,14 @@ Hailo 路线现在只通过固定 `model` 选择。当前临时接受的 `6` 个
 - `network.max_detections`：NMS 后最多保留候选数量。
 - `network.enable_quad_check`：是否检查四边形面积和基本形状。
 - `network.min_quad_area_px`：四边形最小面积，单位 `px^2`。
-- `network.model`：固定 detector 模型名；当前接受 `int8-head-l / int8-grid-l / int16-head-l / int8-head / int8-grid / int16-head`。
+- `network.model`：固定 detector 模型枚举；当前接受 `ArmorDetectorModel::INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT8_HEAD / INT8_GRID / INT16_HEAD`。
+
+如果配置层需要写显式表达式，直接用：
+
+```yaml
+network:
+  model: {expr: ArmorDetectorModel::INT8_GRID_L}
+```
 - `number_refine.enabled`：是否启用数字 refine。
 - `number_refine.detector_min_confidence`：允许进入数字 refine 的 detector 最低置信度。
 - `number_refine.classifier_min_confidence`：允许覆盖 detector 编号的分类器最低置信度。
