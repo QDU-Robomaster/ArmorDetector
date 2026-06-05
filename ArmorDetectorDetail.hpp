@@ -13,6 +13,12 @@
 namespace armor_detector_detail
 {
 
+enum class ModelFamily : uint8_t
+{
+  SZU = 0,
+  SKD = 1,
+};
+
 /**
  * @brief 当前 detector 模型输入宽度，单位 px。
  */
@@ -29,9 +35,19 @@ constexpr int model_input_height = 512;
 constexpr int model_candidate_count = 20160;
 
 /**
+ * @brief SKD detector 输出候选数量。
+ */
+constexpr int skd_candidate_count = 6720;
+
+/**
  * @brief 当前 detector 单候选字段数量。
  */
 constexpr int model_output_width = 22;
+
+/**
+ * @brief SKD detector 单候选字段数量。
+ */
+constexpr int skd_output_width = 21;
 
 /**
  * @brief 当前 detector objectness 原始 logit 默认门限。
@@ -77,6 +93,104 @@ inline bool IsValidNetworkInputShape(const NetworkInputShape& shape)
   return shape.width == model_input_width && shape.height == model_input_height;
 }
 
+inline ModelFamily model_family_from_name(const char* name)
+{
+  if (name == nullptr || name[0] == '\0')
+  {
+    return ModelFamily::SZU;
+  }
+  const std::string value(name);
+  if (value == "SKD")
+  {
+    return ModelFamily::SKD;
+  }
+  return ModelFamily::SZU;
+}
+
+inline const char* model_family_name(ModelFamily family)
+{
+  return family == ModelFamily::SKD ? "SKD" : "SZU";
+}
+
+struct ResolvedModelVariant
+{
+  const char* canonical_name{""};
+  ModelFamily family{ModelFamily::SZU};
+  const char* forced_backend{"HAILORT"};
+  const char* openvino_model_path{""};
+  const char* hailort_hef_path{""};
+  const char* hailort_tail_onnx_path{""};
+};
+
+inline const ResolvedModelVariant* resolve_model_variant(const char* name)
+{
+  if (name == nullptr || name[0] == '\0')
+  {
+    return nullptr;
+  }
+
+  static const ResolvedModelVariant kVariants[] = {
+      {
+          "int8-head-l",
+          ModelFamily::SKD,
+          "HAILORT",
+          ARMOR_DETECTOR_SKD_MODEL_PATH,
+          ARMOR_DETECTOR_SKD_INT8_HEAD_L_HEF_PATH,
+          "",
+      },
+      {
+          "int8-grid-l",
+          ModelFamily::SKD,
+          "HAILORT",
+          ARMOR_DETECTOR_SKD_MODEL_PATH,
+          ARMOR_DETECTOR_SKD_INT8_GRID_L_HEF_PATH,
+          "",
+      },
+      {
+          "int16-head-l",
+          ModelFamily::SZU,
+          "HAILORT",
+          ARMOR_DETECTOR_MODEL_PATH,
+          ARMOR_DETECTOR_SZU_INT16_HEAD_L_HEF_PATH,
+          ARMOR_DETECTOR_SZU_TAIL_ONNX_PATH,
+      },
+      {
+          "int8-head",
+          ModelFamily::SKD,
+          "HAILORT",
+          ARMOR_DETECTOR_SKD_MODEL_PATH,
+          ARMOR_DETECTOR_SKD_INT8_HEAD_HEF_PATH,
+          "",
+      },
+      {
+          "int8-grid",
+          ModelFamily::SKD,
+          "HAILORT",
+          ARMOR_DETECTOR_SKD_MODEL_PATH,
+          ARMOR_DETECTOR_SKD_INT8_GRID_HEF_PATH,
+          "",
+      },
+      {
+          "int16-head",
+          ModelFamily::SZU,
+          "HAILORT",
+          ARMOR_DETECTOR_MODEL_PATH,
+          ARMOR_DETECTOR_SZU_INT16_HEAD_HEF_PATH,
+          ARMOR_DETECTOR_SZU_TAIL_ONNX_PATH,
+      },
+  };
+
+  const std::string variant(name);
+  for (const auto& item : kVariants)
+  {
+    if (variant == item.canonical_name)
+    {
+      return &item;
+    }
+  }
+  return nullptr;
+}
+
 /**
  * @brief 网络输入坐标到原始图像坐标的映射。
  */
@@ -107,21 +221,24 @@ struct NetworkInputMapping
 class ModelOutputView
 {
  public:
-  explicit ModelOutputView(const cv::Mat& output) : output_(output)
+  explicit ModelOutputView(const cv::Mat& output, int candidate_count,
+                           int output_width)
+      : output_(output), candidate_count_(candidate_count),
+        output_width_(output_width)
   {
     if (output_.type() != CV_32F || output_.dims != 2)
     {
       return;
     }
-    if (output_.rows == model_candidate_count &&
-        output_.cols == model_output_width)
+    if (output_.rows == candidate_count_ &&
+        output_.cols == output_width_)
     {
       valid_ = true;
       transposed_ = false;
       return;
     }
-    if (output_.rows == model_output_width &&
-        output_.cols == model_candidate_count)
+    if (output_.rows == output_width_ &&
+        output_.cols == candidate_count_)
     {
       valid_ = true;
       transposed_ = true;
@@ -132,8 +249,10 @@ class ModelOutputView
 
   [[nodiscard]] int CandidateCount() const
   {
-    return valid_ ? model_candidate_count : 0;
+    return valid_ ? candidate_count_ : 0;
   }
+
+  [[nodiscard]] int OutputWidth() const { return output_width_; }
 
   [[nodiscard]] float At(int row, int field) const
   {
@@ -143,9 +262,35 @@ class ModelOutputView
 
  private:
   const cv::Mat& output_;
+  int candidate_count_{0};
+  int output_width_{0};
   bool valid_{false};
   bool transposed_{false};
 };
+
+/**
+ * @brief 在任意字段读取器的指定范围内取 argmax。
+ * @param read 输入字段读取器，接受 field 索引并返回 float。
+ * @param begin 起始列，闭区间。
+ * @param end 结束列，开区间。
+ * @return 最大值列号减去 begin 后的类别 id。
+ */
+template <typename FieldReader>
+inline int ArgMaxFieldRange(FieldReader&& read, int begin, int end)
+{
+  int best = begin;
+  float best_value = read(begin);
+  for (int index = begin + 1; index < end; ++index)
+  {
+    const float value = read(index);
+    if (value > best_value)
+    {
+      best_value = value;
+      best = index;
+    }
+  }
+  return best - begin;
+}
 
 /**
  * @brief 在输出视图某一候选的指定字段范围内取 argmax。
@@ -158,18 +303,12 @@ class ModelOutputView
 inline int ArgMaxOutputRange(const ModelOutputView& output, int row,
                              int begin, int end)
 {
-  int best = begin;
-  float best_value = output.At(row, begin);
-  for (int index = begin + 1; index < end; ++index)
-  {
-    const float value = output.At(row, index);
-    if (value > best_value)
-    {
-      best_value = value;
-      best = index;
-    }
-  }
-  return best - begin;
+  return ArgMaxFieldRange(
+      [&output, row](int index)
+      {
+        return output.At(row, index);
+      },
+      begin, end);
 }
 
 /**
@@ -413,6 +552,31 @@ inline cv::Rect expanded_bounding_rect_from_points(
 }
 
 /**
+ * @brief 计算两个整数包围盒的 IoU。
+ */
+inline float rect_iou(const cv::Rect& lhs, const cv::Rect& rhs)
+{
+  const cv::Rect inter = lhs & rhs;
+  if (inter.width <= 0 || inter.height <= 0)
+  {
+    return 0.0F;
+  }
+
+  const float inter_area =
+      static_cast<float>(inter.width) * static_cast<float>(inter.height);
+  const float lhs_area =
+      static_cast<float>(lhs.width) * static_cast<float>(lhs.height);
+  const float rhs_area =
+      static_cast<float>(rhs.width) * static_cast<float>(rhs.height);
+  const float union_area = lhs_area + rhs_area - inter_area;
+  if (union_area <= 0.0F)
+  {
+    return 0.0F;
+  }
+  return inter_area / union_area;
+}
+
+/**
  * @brief 当前 detector 模型颜色类别映射。
  *
  * 模型原始类别 0/1 分别对应蓝色和红色。原始类别 2/3 当前不进入正式检测结果。
@@ -426,6 +590,19 @@ inline ArmorColor color_from_model_id(int color_id)
   if (color_id == 1)
   {
     return ArmorColor::RED;
+  }
+  return ArmorColor::UNKNOWN;
+}
+
+inline ArmorColor color_from_skd_model_id(int color_id)
+{
+  if (color_id == 0)
+  {
+    return ArmorColor::RED;
+  }
+  if (color_id == 1)
+  {
+    return ArmorColor::BLUE;
   }
   return ArmorColor::UNKNOWN;
 }
@@ -466,6 +643,31 @@ inline ArmorNumber number_from_model_class_id(int class_id)
     case 8:
       return ArmorNumber::OUTPOST;
     case 9:
+      return ArmorNumber::BASE;
+    default:
+      return ArmorNumber::UNKNOWN;
+  }
+}
+
+inline ArmorNumber number_from_skd_model_class_id(int class_id)
+{
+  switch (class_id)
+  {
+    case 0:
+      return ArmorNumber::GUARD;
+    case 1:
+      return ArmorNumber::ONE;
+    case 2:
+      return ArmorNumber::TWO;
+    case 3:
+      return ArmorNumber::THREE;
+    case 4:
+      return ArmorNumber::FOUR;
+    case 5:
+      return ArmorNumber::FIVE;
+    case 6:
+      return ArmorNumber::OUTPOST;
+    case 7:
       return ArmorNumber::BASE;
     default:
       return ArmorNumber::UNKNOWN;

@@ -71,7 +71,46 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   preview_.Stop();
   preview_.Start(cfg_.preview);
 
-  const char* model_path = ARMOR_DETECTOR_MODEL_PATH;
+  const auto* resolved_variant =
+      detail::resolve_model_variant(cfg_.network.model_variant);
+  if (cfg_.network.model_variant != nullptr &&
+      cfg_.network.model_variant[0] != '\0' &&
+      resolved_variant == nullptr)
+  {
+    XR_LOG_ERROR("ArmorDetector unknown model_variant=%s, falling back to legacy config fields",
+                 cfg_.network.model_variant);
+  }
+
+  const char* model_family =
+      (resolved_variant != nullptr)
+          ? detail::model_family_name(resolved_variant->family)
+          : cfg_.network.model_family;
+  if (model_family == nullptr || model_family[0] == '\0')
+  {
+    model_family = "SZU";
+  }
+
+  const bool use_skd_model = std::string(model_family) == "SKD";
+  const char* openvino_model_path =
+      (resolved_variant != nullptr) ? resolved_variant->openvino_model_path
+                                    : cfg_.network.openvino_model_path;
+  if (openvino_model_path == nullptr)
+  {
+    openvino_model_path = "";
+  }
+  const char* model_path =
+      openvino_model_path[0] != '\0'
+          ? openvino_model_path
+          : (use_skd_model ? ARMOR_DETECTOR_SKD_MODEL_PATH
+                           : ARMOR_DETECTOR_MODEL_PATH);
+
+  const char* backend_name =
+      (resolved_variant != nullptr) ? resolved_variant->forced_backend
+                                    : cfg_.network.backend;
+  if (backend_name == nullptr || backend_name[0] == '\0')
+  {
+    backend_name = "AUTO_DETECT";
+  }
 
   const char* openvino_device = cfg_.network.openvino_device;
   if (openvino_device == nullptr || openvino_device[0] == '\0')
@@ -84,30 +123,34 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   {
     openvino_performance_mode = "LATENCY";
   }
+  const char* hailort_hef_path =
+      (resolved_variant != nullptr) ? resolved_variant->hailort_hef_path
+                                    : cfg_.network.hailort_hef_path;
+  if (hailort_hef_path == nullptr)
+  {
+    hailort_hef_path = "";
+  }
+  const char* hailort_tail_onnx_path =
+      (resolved_variant != nullptr) ? resolved_variant->hailort_tail_onnx_path
+                                    : cfg_.network.hailort_tail_onnx_path;
+  if (hailort_tail_onnx_path == nullptr)
+  {
+    hailort_tail_onnx_path = "";
+  }
 
   XR_LOG_INFO(
-      "ArmorDetector model device=%s mode=%s path=%s", openvino_device,
-      openvino_performance_mode, model_path);
+      "ArmorDetector variant=%s family=%s backend=%s model_path=%s hef_path=%s tail_onnx=%s device=%s mode=%s",
+      (resolved_variant != nullptr) ? resolved_variant->canonical_name : "",
+      model_family, backend_name, model_path, hailort_hef_path,
+      hailort_tail_onnx_path, openvino_device, openvino_performance_mode);
   XR_LOG_INFO(
       "ArmorDetector decode logit=%.3f confidence=%.3f nms=%.3f bbox_expand=%.3f max_det=%d",
       cfg_.network.logit_threshold, cfg_.network.min_confidence,
       cfg_.network.nms_threshold, cfg_.network.bbox_expand,
       cfg_.network.max_detections);
-  network_.Configure(model_path, openvino_device, openvino_performance_mode);
-
-  if (cfg_.number_refine.enabled)
-  {
-    XR_LOG_INFO(
-        "ArmorDetector number refine enabled detector_min=%.3f classifier_min=%.3f type_gate=%u",
-        cfg_.number_refine.detector_min_confidence,
-        cfg_.number_refine.classifier_min_confidence,
-        cfg_.number_refine.enforce_type_compatibility ? 1U : 0U);
-    number_refiner_.Configure(ARMOR_DETECTOR_NUMBER_MODEL_PATH);
-  }
-  else
-  {
-    number_refiner_.Reset();
-  }
+  network_.Configure(model_family, backend_name, model_path, openvino_device,
+                     openvino_performance_mode, hailort_hef_path,
+                     hailort_tail_onnx_path);
 }
 
 /**
@@ -219,12 +262,38 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
 
   const auto start_time = std::chrono::steady_clock::now();
   const cv::Mat& bgr_img = img_msg;
+  const uint64_t next_frame_index = frame_index_ + 1U;
+  const bool trace_frame = (next_frame_index <= 5U) || (next_frame_index % 30U == 0U);
+
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=detect_begin ts=%llu",
+                static_cast<unsigned long long>(next_frame_index),
+                static_cast<unsigned long long>(image_timestamp_us));
+  }
 
   const auto armors = Detect(bgr_img);
   const auto detector_finish = std::chrono::steady_clock::now();
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=detect_end armors=%zu decoded=%u semantic_kept=%u",
+                static_cast<unsigned long long>(next_frame_index), armors.size(),
+                counters_.decoded_count, counters_.semantic_kept_count);
+  }
 
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=fill_begin",
+                static_cast<unsigned long long>(next_frame_index));
+  }
   FillResultMessage(armors, bgr_img);
   const auto result_finish = std::chrono::steady_clock::now();
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=fill_end results=%zu pnp=%u",
+                static_cast<unsigned long long>(next_frame_index),
+                armors_packet_.results.size(), counters_.pnp_success_count);
+  }
 
   ++frame_index_;
   metrics_msg_.frame_index = frame_index_;
@@ -238,6 +307,12 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   metrics_msg_.semantic_discard_count = counters_.semantic_discard_count;
   metrics_msg_.type_discard_count = counters_.type_discard_count;
   metrics_msg_.max_objectness = counters_.max_objectness;
+  metrics_msg_.preprocess_latency_ms = last_preprocess_latency_ms_;
+  metrics_msg_.infer_latency_ms = last_infer_latency_ms_;
+  metrics_msg_.postprocess_latency_ms = last_postprocess_latency_ms_;
+  const auto hailo_timing = network_.LastHailoTiming();
+  metrics_msg_.hailo_infer_latency_ms = hailo_timing.valid ? hailo_timing.infer_ms : 0.0;
+  metrics_msg_.hailo_tail_latency_ms = hailo_timing.valid ? hailo_timing.tail_ms : 0.0;
   metrics_msg_.detector_latency_ms =
       std::chrono::duration<double, std::milli>(detector_finish - start_time).count();
   metrics_msg_.result_latency_ms =
@@ -245,8 +320,28 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
 
   DetectionMessage armors_frame_msg = &armors_frame_packet_;
   const LibXR::MicrosecondTimestamp publish_timestamp(image_timestamp_us);
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=publish_begin",
+                static_cast<unsigned long long>(frame_index_));
+  }
   armors_frame_topic_.Publish(armors_frame_msg, publish_timestamp);
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=publish_end",
+                static_cast<unsigned long long>(frame_index_));
+  }
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=preview_begin",
+                static_cast<unsigned long long>(frame_index_));
+  }
   SubmitPreview(bgr_img);
+  if (trace_frame)
+  {
+    XR_LOG_INFO("ArmorDetector trace frame=%llu step=preview_end",
+                static_cast<unsigned long long>(frame_index_));
+  }
 
   if ((frame_index_ % detail::metrics_log_period) == 0U)
   {
@@ -262,6 +357,13 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
         metrics_msg_.type_discard_count, metrics_msg_.discarded_count,
         metrics_msg_.max_objectness,
         metrics_msg_.detector_latency_ms, metrics_msg_.result_latency_ms);
+    XR_LOG_INFO(
+        "ArmorDetector split_ms preprocess=%.3f infer_call=%.3f postprocess=%.3f hailo_infer=%.3f hailo_tail=%.3f",
+        metrics_msg_.preprocess_latency_ms,
+        metrics_msg_.infer_latency_ms,
+        metrics_msg_.postprocess_latency_ms,
+        metrics_msg_.hailo_infer_latency_ms,
+        metrics_msg_.hailo_tail_latency_ms);
   }
 }
 

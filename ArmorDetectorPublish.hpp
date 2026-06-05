@@ -51,4 +51,71 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
 
     armors_packet_.results.emplace_back(std::move(result));
   }
+
+  MaybeDumpResultsTsv(armors);
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+void ArmorDetector<CameraInfoV>::MaybeDumpResultsTsv(
+    const std::vector<CandidateArmor>& armors)
+{
+  const char* path = std::getenv("ARMOR_DETECTOR_DUMP_TSV");
+  if (path == nullptr || path[0] == '\0')
+  {
+    return;
+  }
+
+  static std::string active_path;
+  static std::FILE* file = nullptr;
+  if (active_path != path)
+  {
+    if (file != nullptr)
+    {
+      std::fclose(file);
+      file = nullptr;
+    }
+    active_path = path;
+    file = std::fopen(active_path.c_str(), "w");
+    if (file == nullptr)
+    {
+      XR_LOG_ERROR("ArmorDetector failed to open dump TSV: %s",
+                   active_path.c_str());
+      active_path.clear();
+      return;
+    }
+    std::fprintf(
+        file,
+        "frame_index\timage_timestamp_us\tresult_index\tcolor\tnumber\tconfidence\tcenter_x\tcenter_y\tp0_x\tp0_y\tp1_x\tp1_y\tp2_x\tp2_y\tp3_x\tp3_y\n");
+    std::fflush(file);
+  }
+
+  if (file == nullptr)
+  {
+    return;
+  }
+
+  for (std::size_t index = 0; index < armors.size(); ++index)
+  {
+    const auto& armor = armors[index];
+    std::fprintf(
+        file,
+        "%llu\t%llu\t%zu\t%u\t%u\t%.9f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",
+        static_cast<unsigned long long>(frame_index_ + 1U),
+        static_cast<unsigned long long>(latest_timestamp_us_),
+        index,
+        static_cast<unsigned>(armor.color),
+        static_cast<unsigned>(armor.number),
+        static_cast<double>(armor.confidence),
+        static_cast<double>(armor.center.x),
+        static_cast<double>(armor.center.y),
+        static_cast<double>(armor.points[0].x),
+        static_cast<double>(armor.points[0].y),
+        static_cast<double>(armor.points[1].x),
+        static_cast<double>(armor.points[1].y),
+        static_cast<double>(armor.points[2].x),
+        static_cast<double>(armor.points[2].y),
+        static_cast<double>(armor.points[3].x),
+        static_cast<double>(armor.points[3].y));
+  }
+  std::fflush(file);
 }

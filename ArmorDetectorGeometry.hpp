@@ -104,39 +104,6 @@ ArmorType ArmorDetector<CameraInfoV>::InferArmorType(const CandidateArmor& armor
 }
 
 /**
- * @brief 判断 refine 编号是否与明确几何尺寸冲突。
- *
- * @tparam CameraInfoV 编译期相机参数。
- * @param number 分类器输出编号。
- * @param armor 当前候选。
- * @return 未冲突时返回 true。
- */
-template <CameraTypes::CameraInfo CameraInfoV>
-bool ArmorDetector<CameraInfoV>::RefinedNumberCompatibleWithGeometry(
-    ArmorNumber number, const CandidateArmor& armor) const
-{
-  if (!cfg_.number_refine.enforce_type_compatibility)
-  {
-    return true;
-  }
-
-  const ArmorType geometry_type = GeometryTypeHint(armor);
-  if (geometry_type == ArmorType::INVALID)
-  {
-    return true;
-  }
-  if (ArmorNumberIsLarge(number))
-  {
-    return geometry_type == ArmorType::LARGE;
-  }
-  if (ArmorNumberIsSmall(number))
-  {
-    return geometry_type == ArmorType::SMALL;
-  }
-  return true;
-}
-
-/**
  * @brief 将像素中心归一化到图像宽高范围。
  *
  * @tparam CameraInfoV 编译期相机参数。

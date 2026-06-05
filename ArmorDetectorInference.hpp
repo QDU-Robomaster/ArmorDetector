@@ -35,7 +35,11 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
   }
 
   detail::NetworkInputMapping input_mapping;
+  const auto preprocess_begin = std::chrono::steady_clock::now();
   const cv::Mat input = BuildNetworkInput(raw_img, input_mapping);
+  const auto preprocess_end = std::chrono::steady_clock::now();
+  last_preprocess_latency_ms_ =
+      std::chrono::duration<double, std::milli>(preprocess_end - preprocess_begin).count();
   if (input.empty())
   {
     ++counters_.discarded_count;
@@ -43,12 +47,85 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
   }
 
   cv::Mat output;
+  const auto infer_begin = std::chrono::steady_clock::now();
   if (!network_.Infer(input, output))
   {
+    const auto infer_end = std::chrono::steady_clock::now();
+    last_infer_latency_ms_ =
+        std::chrono::duration<double, std::milli>(infer_end - infer_begin).count();
+    last_postprocess_latency_ms_ = 0.0;
     return {};
   }
+  const auto infer_end = std::chrono::steady_clock::now();
+  last_infer_latency_ms_ =
+      std::chrono::duration<double, std::milli>(infer_end - infer_begin).count();
 
-  return DecodeOutput(raw_img, input_mapping, output);
+  MaybeDumpModelOutput(output);
+
+  const auto postprocess_begin = std::chrono::steady_clock::now();
+  auto armors = DecodeOutput(raw_img, input_mapping, output);
+  const auto postprocess_end = std::chrono::steady_clock::now();
+  last_postprocess_latency_ms_ =
+      std::chrono::duration<double, std::milli>(postprocess_end - postprocess_begin).count();
+  return armors;
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+void ArmorDetector<CameraInfoV>::MaybeDumpModelOutput(const cv::Mat& output)
+{
+  const char* path = std::getenv("ARMOR_DETECTOR_DUMP_OUTPUT_F32");
+  if (path == nullptr || path[0] == '\0')
+  {
+    return;
+  }
+  if (output.empty() || output.type() != CV_32F || output.dims != 2)
+  {
+    return;
+  }
+
+  const char* frame_env = std::getenv("ARMOR_DETECTOR_DUMP_OUTPUT_FRAME_INDEX");
+  if (frame_env != nullptr && frame_env[0] != '\0')
+  {
+    const unsigned long requested_frame = std::strtoul(frame_env, nullptr, 10);
+    const unsigned long current_frame =
+        static_cast<unsigned long>(frame_index_ + 1U);
+    if (requested_frame != current_frame)
+    {
+      return;
+    }
+  }
+
+  static std::string active_path;
+  static bool dumped = false;
+  if (active_path != path)
+  {
+    active_path = path;
+    dumped = false;
+  }
+  if (dumped)
+  {
+    return;
+  }
+
+  std::FILE* file = std::fopen(active_path.c_str(), "wb");
+  if (file == nullptr)
+  {
+    XR_LOG_ERROR("ArmorDetector failed to open model output dump: %s",
+                 active_path.c_str());
+    return;
+  }
+
+  const int32_t rows = output.rows;
+  const int32_t cols = output.cols;
+  std::fwrite(&rows, sizeof(rows), 1, file);
+  std::fwrite(&cols, sizeof(cols), 1, file);
+  for (int r = 0; r < rows; ++r)
+  {
+    const float* ptr = output.ptr<float>(r);
+    std::fwrite(ptr, sizeof(float), static_cast<size_t>(cols), file);
+  }
+  std::fclose(file);
+  dumped = true;
 }
 
 /**
@@ -101,27 +178,61 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
     const cv::Mat& output)
 {
   std::vector<NetworkDetection> detections;
-  const ArmorColor target_color = CurrentTargetColor();
 
-  const detail::ModelOutputView output_view(output);
+  const auto family = detail::model_family_from_name(cfg_.network.model_family);
+  const int candidate_count =
+      family == detail::ModelFamily::SKD ? detail::skd_candidate_count
+                                         : detail::model_candidate_count;
+  const int output_width =
+      family == detail::ModelFamily::SKD ? detail::skd_output_width
+                                         : detail::model_output_width;
+  const detail::ModelOutputView output_view(output, candidate_count, output_width);
   if (!output_view.Valid())
   {
     const auto input_shape = network_.InputShape();
     XR_LOG_ERROR(
         "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=%dx%d input=%dx%d",
-        output.rows, output.cols, output.type(), detail::model_candidate_count,
-        detail::model_output_width, input_shape.width, input_shape.height);
+        output.rows, output.cols, output.type(), candidate_count,
+        output_width, input_shape.width, input_shape.height);
     ++counters_.discarded_count;
     return {};
   }
 
+  float max_objectness_logit = -1.0e9F;
+  std::array<int, 4> raw_color_hist{0, 0, 0, 0};
+  uint32_t objectness_pass_count = 0U;
+  uint32_t raw_color_keep_count = 0U;
+  uint32_t quad_keep_count = 0U;
   for (int row = 0; row < output_view.CandidateCount(); ++row)
   {
+    const float objectness_logit = output_view.At(row, 8);
+    max_objectness_logit = std::max(max_objectness_logit, objectness_logit);
+    const int raw_color_id =
+        detail::ArgMaxOutputRange(
+            output_view, row, family == detail::ModelFamily::SKD ? 17 : 9,
+            family == detail::ModelFamily::SKD ? 19 : 13);
+    if (raw_color_id >= 0 && raw_color_id < static_cast<int>(raw_color_hist.size()))
+    {
+      ++raw_color_hist[static_cast<std::size_t>(raw_color_id)];
+    }
+    if (objectness_logit >= static_cast<float>(cfg_.network.logit_threshold > 0.0
+                                                   ? cfg_.network.logit_threshold
+                                                   : detail::default_logit_threshold))
+    {
+      ++objectness_pass_count;
+      if (family == detail::ModelFamily::SKD ||
+          (raw_color_id != 2 && raw_color_id != 3))
+      {
+        ++raw_color_keep_count;
+      }
+    }
+
     const auto detection = DecodeModelDetection(mapping, output_view, row);
     if (!detection.has_value())
     {
       continue;
     }
+    ++quad_keep_count;
 
     counters_.max_objectness =
         std::max(counters_.max_objectness,
@@ -132,10 +243,35 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
 
   if (detections.empty())
   {
+    XR_LOG_INFO(
+        "ArmorDetector zero-decode diag max_obj_logit=%.3f max_obj_sigmoid=%.3f raw_color_hist=[%d,%d,%d,%d] pass_obj=%u pass_color=%u pass_quad=%u",
+        max_objectness_logit, detail::Sigmoid(max_objectness_logit),
+        raw_color_hist[0], raw_color_hist[1], raw_color_hist[2],
+        raw_color_hist[3], objectness_pass_count, raw_color_keep_count,
+        quad_keep_count);
+  }
+
+  if (detections.empty())
+  {
     return {};
   }
 
-  const std::vector<int> indices = SelectDetectionsAfterOpenCvNms(detections);
+  return FinalizeDetections(raw_img, std::move(detections));
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
+ArmorDetector<CameraInfoV>::FinalizeDetections(
+    const cv::Mat& raw_img, std::vector<NetworkDetection>&& detections)
+{
+  if (detections.empty())
+  {
+    return {};
+  }
+
+  const ArmorColor target_color = CurrentTargetColor();
+  std::vector<int> indices = SelectDetectionsAfterOpenCvNms(detections);
+  SuppressNearDuplicateDetections(detections, indices);
   counters_.overlap_kept_count = static_cast<uint32_t>(indices.size());
 
   std::vector<CandidateArmor> armors;
@@ -165,12 +301,67 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
       continue;
     }
 
-    RefineNumberIfConfident(raw_img, armor);
-
     armors.emplace_back(std::move(armor));
   }
 
   return armors;
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+void ArmorDetector<CameraInfoV>::SuppressNearDuplicateDetections(
+    const std::vector<NetworkDetection>& detections,
+    std::vector<int>& indices) const
+{
+  if (indices.size() <= 1U)
+  {
+    return;
+  }
+
+  constexpr float kDuplicateCenterDistancePx = 24.0F;
+  constexpr float kDuplicateIouThreshold = 0.35F;
+
+  std::vector<int> kept;
+  kept.reserve(indices.size());
+  for (const int index : indices)
+  {
+    const auto& candidate = detections[static_cast<std::size_t>(index)];
+    bool duplicate = false;
+    for (const int kept_index : kept)
+    {
+      const auto& reference =
+          detections[static_cast<std::size_t>(kept_index)];
+      if (candidate.color != reference.color ||
+          candidate.number != reference.number)
+      {
+        continue;
+      }
+
+      const cv::Point2f candidate_center = detail::quad_center(candidate.points);
+      const cv::Point2f reference_center = detail::quad_center(reference.points);
+      const float center_distance =
+          cv::norm(candidate_center - reference_center);
+      if (center_distance <= kDuplicateCenterDistancePx)
+      {
+        duplicate = true;
+        break;
+      }
+
+      const float iou =
+          detail::rect_iou(candidate.box, reference.box);
+      if (iou >= kDuplicateIouThreshold)
+      {
+        duplicate = true;
+        break;
+      }
+    }
+
+    if (!duplicate)
+    {
+      kept.push_back(index);
+    }
+  }
+
+  indices = std::move(kept);
 }
 
 /**
@@ -232,12 +423,24 @@ ArmorDetector<CameraInfoV>::DecodeModelDetection(
     const detail::NetworkInputMapping& mapping,
     const detail::ModelOutputView& output, int row) const
 {
-  if (!output.Valid() || row >= output.CandidateCount())
-  {
-    return std::nullopt;
-  }
+  return DecodeModelDetectionFromFields(
+      mapping,
+      [&output, row](int field)
+      {
+        return output.At(row, field);
+      },
+      output.OutputWidth());
+}
 
-  const float objectness_logit = output.At(row, 8);
+template <CameraTypes::CameraInfo CameraInfoV>
+template <typename FieldReader>
+std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
+ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
+    const detail::NetworkInputMapping& mapping, FieldReader&& read,
+    int field_count) const
+{
+  const auto family = detail::model_family_from_name(cfg_.network.model_family);
+  const float objectness_logit = read(8);
   const double logit_threshold =
       cfg_.network.logit_threshold > 0.0
           ? cfg_.network.logit_threshold
@@ -247,23 +450,37 @@ ArmorDetector<CameraInfoV>::DecodeModelDetection(
     return std::nullopt;
   }
 
-  const int raw_color_id = detail::ArgMaxOutputRange(output, row, 9, 13);
-  if (raw_color_id == 2 || raw_color_id == 3)
-  {
-    return std::nullopt;
-  }
-  const int raw_class_id = detail::ArgMaxOutputRange(output, row, 13, 22);
+  const int raw_color_id =
+      detail::ArgMaxFieldRange(
+          [&read](int field)
+          {
+            return read(field);
+          },
+          family == detail::ModelFamily::SKD ? 17 : 9,
+          family == detail::ModelFamily::SKD ? 19 : 13);
+  const int raw_class_id =
+      detail::ArgMaxFieldRange(
+          [&read](int field)
+          {
+            return read(field);
+          },
+          family == detail::ModelFamily::SKD ? 9 : 13,
+          family == detail::ModelFamily::SKD ? 17 : field_count);
 
   std::array<cv::Point2f, 4> declared_points{};
   for (int point_index = 0; point_index < 4; ++point_index)
   {
-    const float x = output.At(row, point_index * 2);
-    const float y = output.At(row, point_index * 2 + 1);
+    const float x = read(point_index * 2);
+    const float y = read(point_index * 2 + 1);
     declared_points[static_cast<std::size_t>(point_index)] =
         mapping.MapToSource(x, y);
   }
 
-  const auto points = detail::model_points_to_canonical(declared_points);
+  const auto points =
+      family == detail::ModelFamily::SKD
+          ? std::array<cv::Point2f, 4>{declared_points[0], declared_points[1],
+                                       declared_points[3], declared_points[2]}
+          : detail::model_points_to_canonical(declared_points);
   if (cfg_.network.enable_quad_check &&
       !detail::IsUsableQuad(points, cfg_.network.min_quad_area_px))
   {
@@ -271,9 +488,22 @@ ArmorDetector<CameraInfoV>::DecodeModelDetection(
   }
 
   NetworkDetection detection;
-  detection.color = detail::color_from_model_id(raw_color_id);
-  detection.number = detail::number_from_model_class_id(raw_class_id);
-  detection.confidence = detail::Sigmoid(objectness_logit);
+  if (family != detail::ModelFamily::SKD &&
+      (raw_color_id == 2 || raw_color_id == 3))
+  {
+    return std::nullopt;
+  }
+  detection.color =
+      family == detail::ModelFamily::SKD
+          ? detail::color_from_skd_model_id(raw_color_id)
+          : detail::color_from_model_id(raw_color_id);
+  detection.number =
+      family == detail::ModelFamily::SKD
+          ? detail::number_from_skd_model_class_id(raw_class_id)
+          : detail::number_from_model_class_id(raw_class_id);
+  detection.confidence =
+      family == detail::ModelFamily::SKD ? objectness_logit
+                                         : detail::Sigmoid(objectness_logit);
   detection.points = points;
   const double bbox_expand =
       cfg_.network.bbox_expand >= 0.0 ? cfg_.network.bbox_expand
@@ -306,49 +536,4 @@ ArmorDetector<CameraInfoV>::BuildCandidateArmor(
   armor.center = detail::quad_center(armor.points);
   UpdateGeometryMetrics(armor);
   return armor;
-}
-
-/**
- * @brief 使用 MLP 对 detector 编号做置信度门控后的覆盖。
- *
- * @tparam CameraInfoV 编译期相机参数。
- * @param bgr_img 当前源图像。
- * @param armor 待 refine 候选。
- * @return 成功覆盖编号时返回 true。
- */
-template <CameraTypes::CameraInfo CameraInfoV>
-bool ArmorDetector<CameraInfoV>::RefineNumberIfConfident(
-    const cv::Mat& bgr_img, CandidateArmor& armor)
-{
-  if (!cfg_.number_refine.enabled || !number_refiner_.Ready())
-  {
-    return false;
-  }
-  if (armor.confidence <
-      static_cast<float>(cfg_.number_refine.detector_min_confidence))
-  {
-    return false;
-  }
-
-  const auto prediction =
-      number_refiner_.Predict(bgr_img, armor.points, armor.type);
-  if (!prediction.valid ||
-      prediction.confidence <
-          static_cast<float>(cfg_.number_refine.classifier_min_confidence))
-  {
-    return false;
-  }
-  if (prediction.number == ArmorNumber::NEGATIVE ||
-      !ArmorNumberIsKnown(prediction.number))
-  {
-    return false;
-  }
-  if (!RefinedNumberCompatibleWithGeometry(prediction.number, armor))
-  {
-    return false;
-  }
-
-  armor.number = prediction.number;
-  ApplyNumberTypePrior(armor);
-  return true;
 }

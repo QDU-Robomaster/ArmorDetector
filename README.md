@@ -34,6 +34,32 @@
 
 数字 refine 模型使用 OpenCV DNN CPU 后处理。它只在检测候选已经成立后运行，用数字 ROI 的分类结果覆盖 detector 编号；置信度不够或尺寸类型冲突时不会覆盖。
 
+Hailo 路线现在支持固定 `model_variant` 选择，不必再手写外部 HEF 路径。当前临时接受的 `6` 个变体是：
+
+- `int8-head-l`
+- `int8-grid-l`
+- `int16-head-l`
+- `int8-head`
+- `int8-grid`
+- `int16-head`
+
+这些变体都已经映射到模块目录下的稳定工件文件名：
+
+- `model/skd_int8_head_l.hef`
+- `model/skd_int8_grid_l.hef`
+- `model/szu_int16_head_l.hef`
+- `model/skd_int8_head.hef`
+- `model/skd_int8_grid.hef`
+- `model/szu_int16_head.hef`
+
+其中：
+
+- `int8-head*`：SKD 六输出 host-tail 语义
+- `int8-grid*`：SKD 单输出 `21x6720` 语义
+- `int16-head*`：SZU 三头 `conv47/54/60` 语义
+
+`int16-box*` 当前不在接受集合里，不建议配置进当前 detector。
+
 ## 结果内容
 
 单个装甲板结果包含：
@@ -59,6 +85,7 @@
 - `network.max_detections`：NMS 后最多保留候选数量。
 - `network.enable_quad_check`：是否检查四边形面积和基本形状。
 - `network.min_quad_area_px`：四边形最小面积，单位 `px^2`。
+- `network.model_variant`：固定 Hailo 变体入口；设置后会覆盖 `model_family/backend/hailort_hef_path/hailort_tail_onnx_path` 的常规组合。
 - `network.openvino_device`：`AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`。
 - `network.openvino_performance_mode`：`LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`。
 - `number_refine.enabled`：是否启用数字 refine。
