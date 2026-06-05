@@ -2,20 +2,12 @@
 
 #include <cstdint>
 
+#include "infer/ArmorDetectorModelRegistry.hpp"
+
 /**
  * @file ArmorDetectorDetail.hpp
  * @brief ArmorDetector 内部使用的模型常量和轻量几何/语义工具。
  */
-
-enum class ArmorDetectorModel : uint8_t
-{
-  INT8_HEAD_L = 0,
-  INT8_GRID_L = 1,
-  INT16_HEAD_L = 2,
-  INT8_HEAD = 3,
-  INT8_GRID = 4,
-  INT16_HEAD = 5,
-};
 
 /**
  * @brief ArmorDetector 内部实现命名空间。
@@ -24,12 +16,6 @@ enum class ArmorDetectorModel : uint8_t
  */
 namespace armor_detector_detail
 {
-
-enum class ModelFamily : uint8_t
-{
-  SZU = 0,
-  SKD = 1,
-};
 
 /**
  * @brief 当前 detector 模型输入宽度，单位 px。
@@ -42,24 +28,24 @@ constexpr int model_input_width = 640;
 constexpr int model_input_height = 512;
 
 /**
- * @brief 当前 detector 输出候选数量。
+ * @brief `int16` 线 detector 输出候选数量。
  */
-constexpr int model_candidate_count = 20160;
+constexpr int int16_candidate_count = 20160;
 
 /**
- * @brief SKD detector 输出候选数量。
+ * @brief `int8` 线 detector 输出候选数量。
  */
-constexpr int skd_candidate_count = 6720;
+constexpr int int8_candidate_count = 6720;
 
 /**
- * @brief 当前 detector 单候选字段数量。
+ * @brief `int16` 线 detector 单候选字段数量。
  */
-constexpr int model_output_width = 22;
+constexpr int int16_output_width = 22;
 
 /**
- * @brief SKD detector 单候选字段数量。
+ * @brief `int8` 线 detector 单候选字段数量。
  */
-constexpr int skd_output_width = 21;
+constexpr int int8_output_width = 21;
 
 /**
  * @brief 当前 detector objectness 原始 logit 默认门限。
@@ -105,149 +91,6 @@ inline bool IsValidNetworkInputShape(const NetworkInputShape& shape)
   return shape.width == model_input_width && shape.height == model_input_height;
 }
 
-inline ModelFamily model_family_from_name(const char* name)
-{
-  if (name == nullptr || name[0] == '\0')
-  {
-    return ModelFamily::SZU;
-  }
-  const std::string value(name);
-  if (value == "SKD")
-  {
-    return ModelFamily::SKD;
-  }
-  return ModelFamily::SZU;
-}
-
-inline const char* model_family_name(ModelFamily family)
-{
-  return family == ModelFamily::SKD ? "SKD" : "SZU";
-}
-
-inline const char* detector_model_name(ArmorDetectorModel model)
-{
-  switch (model)
-  {
-    case ArmorDetectorModel::INT8_HEAD_L:
-      return "int8-head-l";
-    case ArmorDetectorModel::INT8_GRID_L:
-      return "int8-grid-l";
-    case ArmorDetectorModel::INT16_HEAD_L:
-      return "int16-head-l";
-    case ArmorDetectorModel::INT8_HEAD:
-      return "int8-head";
-    case ArmorDetectorModel::INT8_GRID:
-      return "int8-grid";
-    case ArmorDetectorModel::INT16_HEAD:
-      return "int16-head";
-    default:
-      return "int16-head-l";
-  }
-}
-
-constexpr ArmorDetectorModel default_detector_model = ArmorDetectorModel::INT16_HEAD_L;
-
-struct ResolvedDetectorModel
-{
-  const char* canonical_name{""};
-  ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
-  ModelFamily family{ModelFamily::SZU};
-  const char* forced_backend{"HAILORT"};
-  const char* openvino_model_path{""};
-  const char* hailort_hef_path{""};
-  const char* hailort_tail_onnx_path{""};
-};
-
-inline const ResolvedDetectorModel* resolve_detector_model(ArmorDetectorModel model)
-{
-  static const ResolvedDetectorModel kVariants[] = {
-      {
-          "int8-head-l",
-          ArmorDetectorModel::INT8_HEAD_L,
-          ModelFamily::SKD,
-          "HAILORT",
-          ARMOR_DETECTOR_SKD_MODEL_PATH,
-          ARMOR_DETECTOR_SKD_INT8_HEAD_L_HEF_PATH,
-          "",
-      },
-      {
-          "int8-grid-l",
-          ArmorDetectorModel::INT8_GRID_L,
-          ModelFamily::SKD,
-          "HAILORT",
-          ARMOR_DETECTOR_SKD_MODEL_PATH,
-          ARMOR_DETECTOR_SKD_INT8_GRID_L_HEF_PATH,
-          "",
-      },
-      {
-          "int16-head-l",
-          ArmorDetectorModel::INT16_HEAD_L,
-          ModelFamily::SZU,
-          "HAILORT",
-          ARMOR_DETECTOR_MODEL_PATH,
-          ARMOR_DETECTOR_SZU_INT16_HEAD_L_HEF_PATH,
-          ARMOR_DETECTOR_SZU_TAIL_ONNX_PATH,
-      },
-      {
-          "int8-head",
-          ArmorDetectorModel::INT8_HEAD,
-          ModelFamily::SKD,
-          "HAILORT",
-          ARMOR_DETECTOR_SKD_MODEL_PATH,
-          ARMOR_DETECTOR_SKD_INT8_HEAD_HEF_PATH,
-          "",
-      },
-      {
-          "int8-grid",
-          ArmorDetectorModel::INT8_GRID,
-          ModelFamily::SKD,
-          "HAILORT",
-          ARMOR_DETECTOR_SKD_MODEL_PATH,
-          ARMOR_DETECTOR_SKD_INT8_GRID_HEF_PATH,
-          "",
-      },
-      {
-          "int16-head",
-          ArmorDetectorModel::INT16_HEAD,
-          ModelFamily::SZU,
-          "HAILORT",
-          ARMOR_DETECTOR_MODEL_PATH,
-          ARMOR_DETECTOR_SZU_INT16_HEAD_HEF_PATH,
-          ARMOR_DETECTOR_SZU_TAIL_ONNX_PATH,
-      },
-  };
-
-  switch (model)
-  {
-    case ArmorDetectorModel::INT8_HEAD_L:
-      return &kVariants[0];
-    case ArmorDetectorModel::INT8_GRID_L:
-      return &kVariants[1];
-    case ArmorDetectorModel::INT16_HEAD_L:
-      return &kVariants[2];
-    case ArmorDetectorModel::INT8_HEAD:
-      return &kVariants[3];
-    case ArmorDetectorModel::INT8_GRID:
-      return &kVariants[4];
-    case ArmorDetectorModel::INT16_HEAD:
-      return &kVariants[5];
-    default:
-      return nullptr;
-  }
-}
-
-inline const ResolvedDetectorModel& resolve_detector_model_or_default(
-    ArmorDetectorModel model)
-{
-  const auto* resolved = resolve_detector_model(model);
-  if (resolved != nullptr)
-  {
-    return *resolved;
-  }
-  const auto* fallback = resolve_detector_model(default_detector_model);
-  return *fallback;
-}
-
 /**
  * @brief 网络输入坐标到原始图像坐标的映射。
  */
@@ -270,10 +113,10 @@ struct NetworkInputMapping
 };
 
 /**
- * @brief 当前 detector 20160x22 输出矩阵视图。
+ * @brief 当前 detector 输出矩阵视图。
  *
- * OpenVINO 可能把 [1,20160,22] 暴露成 2D 的 [20160,22] 矩阵。这里同时接受
- * [22,20160] 转置形式，避免不同 OpenVINO 输出展平方式影响解码。
+ * 不同模型适配器可能返回 `[candidate_count, output_width]` 或其转置形式。
+ * 这里统一提供按候选行访问的只读视图。
  */
 class ModelOutputView
 {
@@ -532,20 +375,6 @@ inline ArmorColor detect_color_from_config(int detect_color)
 }
 
 /**
- * @brief 将网络角点顺序映射到 detector/PnP 统一顺序。
- *
- * detector 统一使用左上、右上、右下、左下。
- *
- * @param keypoints 网络输出的四点。
- * @return 左上、右上、右下、左下顺序。
- */
-inline std::array<cv::Point2f, 4> model_points_to_canonical(
-    const std::array<cv::Point2f, 4>& keypoints)
-{
-  return {keypoints[0], keypoints[3], keypoints[2], keypoints[1]};
-}
-
-/**
  * @brief 将 OpenCV PnP rvec/tvec 转成 LibXR Transform。
  * @param rvec OpenCV 旋转向量。
  * @param tvec OpenCV 平移向量，单位 m。
@@ -631,104 +460,6 @@ inline float rect_iou(const cv::Rect& lhs, const cv::Rect& rhs)
     return 0.0F;
   }
   return inter_area / union_area;
-}
-
-/**
- * @brief 当前 detector 模型颜色类别映射。
- *
- * 模型原始类别 0/1 分别对应蓝色和红色。原始类别 2/3 当前不进入正式检测结果。
- */
-inline ArmorColor color_from_model_id(int color_id)
-{
-  if (color_id == 0)
-  {
-    return ArmorColor::BLUE;
-  }
-  if (color_id == 1)
-  {
-    return ArmorColor::RED;
-  }
-  return ArmorColor::UNKNOWN;
-}
-
-inline ArmorColor color_from_skd_model_id(int color_id)
-{
-  if (color_id == 0)
-  {
-    return ArmorColor::RED;
-  }
-  if (color_id == 1)
-  {
-    return ArmorColor::BLUE;
-  }
-  return ArmorColor::UNKNOWN;
-}
-
-/**
- * @brief 当前 detector 模型 9-class tag 映射到 ArmorNumber。
- */
-inline ArmorNumber number_from_model_class_id(int class_id)
-{
-  int tag = class_id;
-  if (tag == 7 || tag == 8)
-  {
-    tag = 9;
-  }
-  else if (tag == 0)
-  {
-    tag = 7;
-  }
-  else if (tag == 6)
-  {
-    tag = 8;
-  }
-
-  switch (tag)
-  {
-    case 1:
-      return ArmorNumber::ONE;
-    case 2:
-      return ArmorNumber::TWO;
-    case 3:
-      return ArmorNumber::THREE;
-    case 4:
-      return ArmorNumber::FOUR;
-    case 5:
-      return ArmorNumber::FIVE;
-    case 7:
-      return ArmorNumber::GUARD;
-    case 8:
-      return ArmorNumber::OUTPOST;
-    case 9:
-      return ArmorNumber::BASE;
-    default:
-      return ArmorNumber::UNKNOWN;
-  }
-}
-
-inline ArmorNumber number_from_skd_model_class_id(int class_id)
-{
-  switch (class_id)
-  {
-    case 0:
-      return ArmorNumber::GUARD;
-    case 1:
-      return ArmorNumber::ONE;
-    case 2:
-      return ArmorNumber::TWO;
-    case 3:
-      return ArmorNumber::THREE;
-    case 4:
-      return ArmorNumber::FOUR;
-    case 5:
-      return ArmorNumber::FIVE;
-    case 6:
-      return ArmorNumber::OUTPOST;
-    case 7:
-      return ArmorNumber::BASE;
-    default:
-      return ArmorNumber::UNKNOWN;
-  }
 }
 
 /**

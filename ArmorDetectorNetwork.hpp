@@ -2,7 +2,7 @@
 
 /**
  * @file ArmorDetectorNetwork.hpp
- * @brief ArmorDetector 的推理后端封装，支持 OpenVINO 与 HailoRT。
+ * @brief ArmorDetector 的 HailoRT 推理封装和模型输出适配。
  */
 
 #include <algorithm>
@@ -23,9 +23,7 @@
 
 #include <opencv2/core.hpp>
 
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-#include <openvino/openvino.hpp>
-#endif
+#include "infer/ArmorDetectorModelAdapter.hpp"
 
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
 #include <hailo/hailort.hpp>
@@ -44,16 +42,14 @@ namespace armor_detector_detail
 enum class DetectorBackendKind
 {
   NONE,
-  OPENVINO,
   HAILORT,
 };
 
 /**
  * @brief ArmorDetector 推理后端封装。
  *
- * 对外保持单一接口：输入为 resize 后的 RGB8 图像，输出为当前 detector family
- * 对应的 `CV_32F` 候选矩阵。SZU 使用 `20160x22`；SKD 使用 `6720x21`
- * direct-keypoint surface 或其 host-tail 变体。
+ * 对外保持单一接口：输入为 resize 后的 RGB8 图像，输出为当前模型适配器
+ * 对应的 `CV_32F` 候选矩阵。当前稳定集合包含 `int8` 和 `int16` 两条线。
  */
 class ArmorDetectorNetwork
 {
@@ -67,50 +63,17 @@ class ArmorDetectorNetwork
   };
 
   /**
-   * @brief 初始化推理后端。
-   * @param model_family detector 模型族：SZU / SKD。
-   * @param backend_name 后端选择：AUTO_DETECT / OPENVINO / HAILORT。
-   * @param model_path OpenVINO ONNX 模型路径。
-   * @param device_name OpenVINO 设备名，例如 CPU/GPU/NPU/AUTO:GPU,NPU。
-   * @param performance_mode OpenVINO performance hint。
-   * @param hailort_hef_path HailoRT HEF 文件路径。
+   * @brief 初始化 HailoRT 后端并绑定当前模型适配器。
+   * @param model 当前 detector 模型解析结果。
    * @return 后端可用且张量约定检查通过时返回 true。
    */
-  bool Configure(const char* model_family, const char* backend_name,
-                 const char* model_path,
-                 const char* device_name, const char* performance_mode,
-                 const char* hailort_hef_path,
-                 const char*)
+  bool Configure(const infer::ResolvedDetectorModel& model)
   {
     Reset();
-
-    model_family_ = model_family_from_name(model_family);
-    requested_backend_name_ = NormalizeBackendName(backend_name);
-    requested_device_name_ = NormalizeDeviceName(device_name);
-    performance_mode_name_ = NormalizePerformanceModeName(performance_mode);
-    hailort_hef_path_ = NormalizeOptionalPath(hailort_hef_path);
-    openvino_model_path_ = NormalizeOptionalPath(model_path);
-    backend_kind_ = ResolveBackendKind(requested_backend_name_, hailort_hef_path_);
-
-    switch (backend_kind_)
-    {
-      case DetectorBackendKind::OPENVINO:
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-        return ConfigureOpenVino(openvino_model_path_.c_str(),
-                                 requested_device_name_.c_str(),
-                                 performance_mode_name_.c_str());
-#else
-        XR_LOG_ERROR("ArmorDetector OpenVINO backend is unavailable in this build");
-        return false;
-#endif
-      case DetectorBackendKind::HAILORT:
-        return ConfigureHailoRt(hailort_hef_path_.c_str());
-      case DetectorBackendKind::NONE:
-      default:
-        XR_LOG_ERROR("ArmorDetector backend is unavailable (requested=%s)",
-                     requested_backend_name_.c_str());
-        return false;
-    }
+    model_line_ = model.line;
+    hailort_hef_path_ = NormalizeOptionalPath(model.hailort_hef_path);
+    backend_kind_ = DetectorBackendKind::HAILORT;
+    return ConfigureHailoRt(hailort_hef_path_.c_str());
   }
 
   /**
@@ -144,7 +107,7 @@ class ArmorDetectorNetwork
   /**
    * @brief 对一帧 RGB8 网络输入执行推理。
    * @param input 已经 resize 到网络宽高的 RGB8 图像。
-   * @param output 输出候选矩阵，格式与原 OpenVINO decoder 保持一致。
+   * @param output 输出候选矩阵，格式与当前模型适配器约定一致。
    * @return 成功时返回 true。
    */
   bool Infer(const cv::Mat& input, cv::Mat& output)
@@ -155,22 +118,12 @@ class ArmorDetectorNetwork
       return false;
     }
 
-    switch (backend_kind_)
+    if (backend_kind_ != DetectorBackendKind::HAILORT)
     {
-      case DetectorBackendKind::OPENVINO:
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-        return InferOpenVino(input, output);
-#else
-        XR_LOG_ERROR("ArmorDetector OpenVINO inference path is unavailable in this build");
-        return false;
-#endif
-      case DetectorBackendKind::HAILORT:
-        return InferHailoRt(input, output);
-      case DetectorBackendKind::NONE:
-      default:
-        XR_LOG_ERROR("ArmorDetector backend is not configured");
-        return false;
+      XR_LOG_ERROR("ArmorDetector backend is not configured");
+      return false;
     }
+    return InferHailoRt(input, output);
   }
 
   template <typename DetectionT, typename DetectionBuilder>
@@ -282,14 +235,12 @@ class ArmorDetectorNetwork
  private:
   int CandidateCount() const
   {
-    return model_family_ == ModelFamily::SKD ? skd_candidate_count
-                                             : model_candidate_count;
+    return infer::resolve_model_infer_adapter(model_line_).candidate_count;
   }
 
   int OutputWidth() const
   {
-    return model_family_ == ModelFamily::SKD ? skd_output_width
-                                             : model_output_width;
+    return infer::resolve_model_infer_adapter(model_line_).output_width;
   }
 
   int HailortOutputFieldCount() const
@@ -303,21 +254,9 @@ class ArmorDetectorNetwork
     backend_kind_ = DetectorBackendKind::NONE;
     backend_name_ = "NONE";
     input_shape_ = {};
-    requested_backend_name_ = "AUTO_DETECT";
-    requested_device_name_ = "AUTO_DETECT";
-    performance_mode_name_ = "LATENCY";
-    openvino_model_path_.clear();
     hailort_hef_path_.clear();
     last_hailo_timing_ = {};
     hailo_infer_call_count_ = 0;
-
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-    available_device_names_.clear();
-    device_name_ = "CPU";
-    compiled_model_ = ov::CompiledModel();
-    infer_request_ = ov::InferRequest();
-    output_tensor_ = ov::Tensor();
-#endif
 
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     hailo_output_infos_.clear();
@@ -340,33 +279,6 @@ class ArmorDetectorNetwork
     return std::string(path);
   }
 
-  static std::string NormalizeBackendName(const char* backend_name)
-  {
-    if (backend_name == nullptr || backend_name[0] == '\0')
-    {
-      return "AUTO_DETECT";
-    }
-    return backend_name;
-  }
-
-  static std::string NormalizeDeviceName(const char* device_name)
-  {
-    if (device_name == nullptr || device_name[0] == '\0')
-    {
-      return "AUTO_DETECT";
-    }
-    return device_name;
-  }
-
-  static std::string NormalizePerformanceModeName(const char* performance_mode)
-  {
-    if (performance_mode == nullptr || performance_mode[0] == '\0')
-    {
-      return "LATENCY";
-    }
-    return performance_mode;
-  }
-
   [[nodiscard]] bool OutputShapeMatches(const cv::Mat& output) const
   {
     return (output.rows == CandidateCount() &&
@@ -374,307 +286,6 @@ class ArmorDetectorNetwork
            (output.rows == OutputWidth() &&
             output.cols == CandidateCount());
   }
-
-  DetectorBackendKind ResolveBackendKind(const std::string& requested_backend,
-                                         const std::string& hailort_hef_path) const
-  {
-    if (requested_backend == "OPENVINO")
-    {
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-      return DetectorBackendKind::OPENVINO;
-#else
-      XR_LOG_ERROR("ArmorDetector requested OPENVINO but OpenVINO support is not compiled");
-      return DetectorBackendKind::NONE;
-#endif
-    }
-
-    if (requested_backend == "HAILORT")
-    {
-#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
-      if (hailort_hef_path.empty())
-      {
-        XR_LOG_ERROR("ArmorDetector requested HAILORT but HEF path is empty");
-        return DetectorBackendKind::NONE;
-      }
-      return DetectorBackendKind::HAILORT;
-#else
-      XR_LOG_ERROR("ArmorDetector requested HAILORT but HailoRT support is not compiled");
-      return DetectorBackendKind::NONE;
-#endif
-    }
-
-    if (requested_backend == "AUTO_DETECT")
-    {
-#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
-      if (!hailort_hef_path.empty())
-      {
-        return DetectorBackendKind::HAILORT;
-      }
-#endif
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-      return DetectorBackendKind::OPENVINO;
-#endif
-#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
-      return DetectorBackendKind::HAILORT;
-#endif
-    }
-
-    XR_LOG_ERROR("ArmorDetector unknown backend %s", requested_backend.c_str());
-    return DetectorBackendKind::NONE;
-  }
-
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-  static NetworkInputShape ModelInputShape(
-      const std::shared_ptr<ov::Model>& model)
-  {
-    const auto shape = model->input().get_partial_shape();
-    if (shape.rank().is_dynamic() || shape.size() != 3U ||
-        shape[0].is_dynamic() || shape[1].is_dynamic() ||
-        shape[2].is_dynamic() || shape[2].get_length() != 3)
-    {
-      return {};
-    }
-    return {static_cast<int>(shape[1].get_length()),
-            static_cast<int>(shape[0].get_length())};
-  }
-
-  bool ModelOutputShapeSupported(const std::shared_ptr<ov::Model>& model) const
-  {
-    const auto shape = model->output().get_partial_shape();
-    const int candidate_count = CandidateCount();
-    const int output_width = OutputWidth();
-    if (shape.rank().is_dynamic())
-    {
-      return false;
-    }
-    if (shape.size() == 3U && !shape[1].is_dynamic() &&
-        !shape[2].is_dynamic())
-    {
-      return shape[1].get_length() == candidate_count &&
-             shape[2].get_length() == output_width;
-    }
-    if (shape.size() == 2U && !shape[0].is_dynamic() &&
-        !shape[1].is_dynamic())
-    {
-      return (shape[0].get_length() == candidate_count &&
-              shape[1].get_length() == output_width) ||
-             (shape[0].get_length() == output_width &&
-              shape[1].get_length() == candidate_count);
-    }
-    return false;
-  }
-
-  static bool DeviceMatches(const std::string& device, const char* base)
-  {
-    const std::string base_name(base);
-    return device == base_name || device.rfind(base_name + ".", 0) == 0;
-  }
-
-  std::string ResolveDeviceName(const std::string& requested_device)
-  {
-    if (requested_device != "AUTO_DETECT")
-    {
-      return requested_device;
-    }
-
-    for (const char* preferred : {"NPU", "GPU", "CPU"})
-    {
-      for (const auto& device : available_device_names_)
-      {
-        if (DeviceMatches(device, preferred))
-        {
-          return device;
-        }
-      }
-    }
-
-    XR_LOG_WARN(
-        "ArmorDetector OpenVINO AUTO_DETECT found no devices, fallback CPU");
-    return "CPU";
-  }
-
-  std::vector<std::string> QueryAvailableDeviceNames()
-  {
-    try
-    {
-      return ov_core_.get_available_devices();
-    }
-    catch (const std::exception& exception)
-    {
-      XR_LOG_WARN("ArmorDetector failed to query OpenVINO devices: %s",
-                  exception.what());
-      return {};
-    }
-  }
-
-  [[nodiscard]] std::string AvailableDevicesText() const
-  {
-    if (available_device_names_.empty())
-    {
-      return "none";
-    }
-
-    std::string text;
-    for (const auto& device : available_device_names_)
-    {
-      if (!text.empty())
-      {
-        text += ",";
-      }
-      text += device;
-    }
-    return text;
-  }
-
-  [[nodiscard]] bool HasAcceleratorDevice() const
-  {
-    for (const auto& device : available_device_names_)
-    {
-      if (!DeviceMatches(device, "CPU"))
-      {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  void LogDeviceSelection() const
-  {
-    const auto available_devices_text = AvailableDevicesText();
-    if (!HasAcceleratorDevice())
-    {
-      XR_LOG_WARN(
-          "ArmorDetector OpenVINO CPU-only runtime; available=%s requested=%s resolved=%s mode=%s",
-          available_devices_text.c_str(), requested_device_name_.c_str(),
-          device_name_.c_str(), performance_mode_name_.c_str());
-      return;
-    }
-
-    XR_LOG_INFO(
-        "ArmorDetector OpenVINO devices=%s requested=%s resolved=%s mode=%s",
-        available_devices_text.c_str(), requested_device_name_.c_str(),
-        device_name_.c_str(), performance_mode_name_.c_str());
-  }
-
-  static ov::hint::PerformanceMode ParsePerformanceMode(
-      const std::string& performance_mode)
-  {
-    if (performance_mode == "LATENCY")
-    {
-      return ov::hint::PerformanceMode::LATENCY;
-    }
-    if (performance_mode == "THROUGHPUT")
-    {
-      return ov::hint::PerformanceMode::THROUGHPUT;
-    }
-    if (performance_mode == "CUMULATIVE_THROUGHPUT")
-    {
-      return ov::hint::PerformanceMode::CUMULATIVE_THROUGHPUT;
-    }
-
-    XR_LOG_WARN(
-        "ArmorDetector unknown OpenVINO performance mode %s, fallback LATENCY",
-        performance_mode.c_str());
-    return ov::hint::PerformanceMode::LATENCY;
-  }
-
-  bool ConfigureOpenVino(const char* model_path, const char* device_name,
-                         const char* performance_mode)
-  {
-    if (model_path == nullptr || model_path[0] == '\0')
-    {
-      XR_LOG_ERROR("ArmorDetector OpenVINO model path is empty");
-      return false;
-    }
-
-    available_device_names_ = QueryAvailableDeviceNames();
-    device_name_ = ResolveDeviceName(requested_device_name_);
-    performance_mode_name_ = NormalizePerformanceModeName(performance_mode);
-
-    try
-    {
-      LogDeviceSelection();
-      auto model = ov_core_.read_model(model_path);
-      input_shape_ = ModelInputShape(model);
-      if (!IsValidNetworkInputShape(input_shape_))
-      {
-        XR_LOG_ERROR("ArmorDetector cannot resolve OpenVINO model input shape");
-        return false;
-      }
-      if (!ModelOutputShapeSupported(model))
-      {
-        XR_LOG_ERROR("ArmorDetector OpenVINO model output shape is unsupported");
-        return false;
-      }
-
-      compiled_model_ = ov_core_.compile_model(
-          model, device_name_,
-          ov::hint::performance_mode(
-              ParsePerformanceMode(performance_mode_name_)));
-      infer_request_ = compiled_model_.create_infer_request();
-      backend_name_ = "OPENVINO";
-      backend_kind_ = DetectorBackendKind::OPENVINO;
-      model_ready_ = true;
-      XR_LOG_PASS(
-          "ArmorDetector loaded OpenVINO model family=%s output=%dx%d input=%dx%d on device %s requested %s mode %s",
-          model_family_ == ModelFamily::SKD ? "SKD" : "SZU",
-          CandidateCount(), OutputWidth(), input_shape_.width,
-          input_shape_.height, device_name_.c_str(),
-          requested_device_name_.c_str(), performance_mode_name_.c_str());
-      return true;
-    }
-    catch (const std::exception& exception)
-    {
-      XR_LOG_ERROR("ArmorDetector failed to load OpenVINO model on device %s mode %s: %s",
-                   device_name_.c_str(), performance_mode_name_.c_str(),
-                   exception.what());
-      return false;
-    }
-  }
-
-  bool InferOpenVino(const cv::Mat& input, cv::Mat& output)
-  {
-    try
-    {
-      const ov::Shape input_tensor_shape{
-          static_cast<size_t>(input_shape_.height),
-          static_cast<size_t>(input_shape_.width), 3};
-      ov::Tensor input_tensor(ov::element::u8, input_tensor_shape, input.data);
-      infer_request_.set_input_tensor(input_tensor);
-      infer_request_.infer();
-
-      output_tensor_ = infer_request_.get_output_tensor();
-      const auto output_shape = output_tensor_.get_shape();
-      if (output_shape.size() != 2U && output_shape.size() != 3U)
-      {
-        XR_LOG_ERROR("ArmorDetector OpenVINO output rank invalid: %u",
-                     static_cast<unsigned>(output_shape.size()));
-        return false;
-      }
-
-      const int rows = static_cast<int>(
-          output_shape.size() == 3U ? output_shape[1] : output_shape[0]);
-      const int cols = static_cast<int>(
-          output_shape.size() == 3U ? output_shape[2] : output_shape[1]);
-      output = cv::Mat(rows, cols, CV_32F, output_tensor_.data<float>());
-      if (!OutputShapeMatches(output))
-      {
-        XR_LOG_ERROR(
-            "ArmorDetector OpenVINO output shape invalid: rows=%d cols=%d expected=%dx%d",
-            output.rows, output.cols, CandidateCount(), OutputWidth());
-        output.release();
-        return false;
-      }
-      return !output.empty();
-    }
-    catch (const std::exception& exception)
-    {
-      XR_LOG_ERROR("ArmorDetector OpenVINO inference failed: %s",
-                   exception.what());
-      return false;
-    }
-  }
-#endif
 
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
   struct HailoOutputBuffer
@@ -833,7 +444,7 @@ class ArmorDetectorNetwork
 
   bool HailoOutputShapeSupported() const
   {
-    if (model_family_ == ModelFamily::SKD)
+    if (model_line_ == infer::ModelLine::INT8)
     {
       if (hailo_output_infos_.size() == 1U)
       {
@@ -843,7 +454,8 @@ class ArmorDetectorNetwork
             static_cast<size_t>(info.shape.width) *
             static_cast<size_t>(info.shape.features);
         return total_values ==
-               static_cast<size_t>(skd_candidate_count * skd_output_width);
+               static_cast<size_t>(detail::int8_candidate_count *
+                                   detail::int8_output_width);
       }
 
       if (hailo_output_infos_.size() == 6U)
@@ -946,7 +558,7 @@ class ArmorDetectorNetwork
       {{373.0F, 326.0F, 373.0F, 326.0F, 373.0F, 326.0F, 373.0F, 326.0F}},
   }};
 
-  static constexpr std::array<const char*, 6> kSkdHostTailOutputNames{{
+  static constexpr std::array<const char*, 6> kInt8HostTailOutputNames{{
       "skd_host_tail_a8/conv45",
       "skd_host_tail_a8/concat11",
       "skd_host_tail_a8/conv59",
@@ -1107,24 +719,26 @@ class ArmorDetectorNetwork
   }
 
   template <typename T>
-  bool CopySingleSkdOutputToMatrix(const std::vector<T>& storage,
+  bool CopySingleInt8OutputToMatrix(const std::vector<T>& storage,
                                    const std::vector<hailo_quant_info_t>& quant_infos,
                                    cv::Mat& output) const
   {
-    output.create(skd_output_width, skd_candidate_count, CV_32F);
-    if (storage.size() < static_cast<size_t>(skd_output_width * skd_candidate_count))
+    output.create(detail::int8_output_width, detail::int8_candidate_count, CV_32F);
+    if (storage.size() < static_cast<size_t>(detail::int8_output_width *
+                                             detail::int8_candidate_count))
     {
-      XR_LOG_ERROR("ArmorDetector SKD single-output buffer too small: got=%zu expected=%d",
-                   storage.size(), skd_output_width * skd_candidate_count);
+      XR_LOG_ERROR("ArmorDetector int8 single-output buffer too small: got=%zu expected=%d",
+                   storage.size(), detail::int8_output_width *
+                                       detail::int8_candidate_count);
       output.release();
       return false;
     }
 
     size_t index = 0;
-    for (int row = 0; row < skd_output_width; ++row)
+    for (int row = 0; row < detail::int8_output_width; ++row)
     {
       float* dst = output.ptr<float>(row);
-      for (int col = 0; col < skd_candidate_count; ++col, ++index)
+      for (int col = 0; col < detail::int8_candidate_count; ++col, ++index)
       {
         dst[col] = LoadQuantizedValue(storage, index, quant_infos, row);
       }
@@ -1133,8 +747,9 @@ class ArmorDetectorNetwork
   }
 
   template <typename T>
-  bool FuseSkdHostTailOutputs(const std::unordered_map<std::string, HailoOutputBuffer>& buffers,
-                              cv::Mat& output) const
+  bool FuseInt8HostTailOutputs(
+      const std::unordered_map<std::string, HailoOutputBuffer>& buffers,
+      cv::Mat& output) const
   {
     const auto read_tensor =
         [&buffers](const char* name) -> const std::vector<T>* {
@@ -1146,27 +761,27 @@ class ArmorDetectorNetwork
           return &std::get<std::vector<T>>(it->second.storage);
         };
 
-    const auto* conv45 = read_tensor(kSkdHostTailOutputNames[0]);
-    const auto* concat11 = read_tensor(kSkdHostTailOutputNames[1]);
-    const auto* conv59 = read_tensor(kSkdHostTailOutputNames[2]);
-    const auto* concat14 = read_tensor(kSkdHostTailOutputNames[3]);
-    const auto* conv72 = read_tensor(kSkdHostTailOutputNames[4]);
-    const auto* concat16 = read_tensor(kSkdHostTailOutputNames[5]);
+    const auto* conv45 = read_tensor(kInt8HostTailOutputNames[0]);
+    const auto* concat11 = read_tensor(kInt8HostTailOutputNames[1]);
+    const auto* conv59 = read_tensor(kInt8HostTailOutputNames[2]);
+    const auto* concat14 = read_tensor(kInt8HostTailOutputNames[3]);
+    const auto* conv72 = read_tensor(kInt8HostTailOutputNames[4]);
+    const auto* concat16 = read_tensor(kInt8HostTailOutputNames[5]);
     if (conv45 == nullptr || concat11 == nullptr || conv59 == nullptr ||
         concat14 == nullptr || conv72 == nullptr || concat16 == nullptr)
     {
-      XR_LOG_ERROR("ArmorDetector missing SKD host-tail outputs");
+      XR_LOG_ERROR("ArmorDetector missing int8 host-tail outputs");
       return false;
     }
 
-    const auto& q45 = buffers.at(kSkdHostTailOutputNames[0]).quant_infos;
-    const auto& q11 = buffers.at(kSkdHostTailOutputNames[1]).quant_infos;
-    const auto& q59 = buffers.at(kSkdHostTailOutputNames[2]).quant_infos;
-    const auto& q14 = buffers.at(kSkdHostTailOutputNames[3]).quant_infos;
-    const auto& q72 = buffers.at(kSkdHostTailOutputNames[4]).quant_infos;
-    const auto& q16_p5 = buffers.at(kSkdHostTailOutputNames[5]).quant_infos;
+    const auto& q45 = buffers.at(kInt8HostTailOutputNames[0]).quant_infos;
+    const auto& q11 = buffers.at(kInt8HostTailOutputNames[1]).quant_infos;
+    const auto& q59 = buffers.at(kInt8HostTailOutputNames[2]).quant_infos;
+    const auto& q14 = buffers.at(kInt8HostTailOutputNames[3]).quant_infos;
+    const auto& q72 = buffers.at(kInt8HostTailOutputNames[4]).quant_infos;
+    const auto& q16_p5 = buffers.at(kInt8HostTailOutputNames[5]).quant_infos;
 
-    output.create(skd_candidate_count, skd_output_width, CV_32F);
+    output.create(detail::int8_candidate_count, detail::int8_output_width, CV_32F);
     constexpr int widths[3] = {80, 40, 20};
     constexpr int heights[3] = {64, 32, 16};
     constexpr int strides[3] = {8, 16, 32};
@@ -1187,9 +802,9 @@ class ArmorDetectorNetwork
       {
         for (int x = 0; x < width; ++x)
         {
-          if (row >= skd_candidate_count)
+          if (row >= detail::int8_candidate_count)
           {
-            XR_LOG_ERROR("ArmorDetector SKD host-tail fused too many rows");
+            XR_LOG_ERROR("ArmorDetector int8 host-tail fused too many rows");
             output.release();
             return false;
           }
@@ -1229,10 +844,10 @@ class ArmorDetectorNetwork
       }
     }
 
-    if (row != skd_candidate_count)
+    if (row != detail::int8_candidate_count)
     {
-      XR_LOG_ERROR("ArmorDetector SKD host-tail fused row count mismatch: got=%d expected=%d",
-                   row, skd_candidate_count);
+      XR_LOG_ERROR("ArmorDetector int8 host-tail fused row count mismatch: got=%d expected=%d",
+                   row, detail::int8_candidate_count);
       output.release();
       return false;
     }
@@ -1431,7 +1046,7 @@ class ArmorDetectorNetwork
           const size_t anchor_offset =
               cell_offset +
               static_cast<size_t>(anchor * HailortOutputFieldCount());
-          std::array<float, model_output_width> fields{};
+          std::array<float, detail::int16_output_width> fields{};
           for (int point_index = 0; point_index < 4; ++point_index)
           {
             const int x_index = point_index * 2;
@@ -1606,8 +1221,8 @@ class ArmorDetectorNetwork
       MaybeDumpHailoHeadTensors(hailo_infer_call_count_);
       const auto tail_begin = std::chrono::steady_clock::now();
       const bool ok =
-          (model_family_ == ModelFamily::SKD) ? BuildSkdHailoOutput(output)
-                                              : FuseHailoOutputs(output);
+          (model_line_ == infer::ModelLine::INT8) ? BuildInt8HailoOutput(output)
+                                                  : BuildInt16HailoOutput(output);
       const auto tail_end = std::chrono::steady_clock::now();
       if (ok)
       {
@@ -1643,7 +1258,7 @@ class ArmorDetectorNetwork
     }
   }
 
-  bool BuildSkdHailoOutput(cv::Mat& output)
+  bool BuildInt8HailoOutput(cv::Mat& output)
   {
     if (hailo_output_infos_.size() == 1U)
     {
@@ -1651,7 +1266,7 @@ class ArmorDetectorNetwork
       const auto buffer_it = hailo_output_buffers_.find(info.name);
       if (buffer_it == hailo_output_buffers_.end())
       {
-        XR_LOG_ERROR("ArmorDetector missing SKD Hailo output buffer for %s",
+        XR_LOG_ERROR("ArmorDetector missing int8 Hailo output buffer for %s",
                      info.name);
         return false;
       }
@@ -1659,19 +1274,19 @@ class ArmorDetectorNetwork
       switch (buffer.format_type)
       {
         case HAILO_FORMAT_TYPE_UINT8:
-          return CopySingleSkdOutputToMatrix(
+          return CopySingleInt8OutputToMatrix(
               std::get<std::vector<uint8_t>>(buffer.storage),
               buffer.quant_infos, output);
         case HAILO_FORMAT_TYPE_UINT16:
-          return CopySingleSkdOutputToMatrix(
+          return CopySingleInt8OutputToMatrix(
               std::get<std::vector<uint16_t>>(buffer.storage),
               buffer.quant_infos, output);
         case HAILO_FORMAT_TYPE_FLOAT32:
-          return CopySingleSkdOutputToMatrix(
+          return CopySingleInt8OutputToMatrix(
               std::get<std::vector<float>>(buffer.storage),
               buffer.quant_infos, output);
         default:
-          XR_LOG_ERROR("ArmorDetector unsupported SKD Hailo output format in single-output path: %d",
+          XR_LOG_ERROR("ArmorDetector unsupported int8 Hailo output format in single-output path: %d",
                        static_cast<int>(buffer.format_type));
           return false;
       }
@@ -1682,30 +1297,30 @@ class ArmorDetectorNetwork
       const auto first_it = hailo_output_buffers_.begin();
       if (first_it == hailo_output_buffers_.end())
       {
-        XR_LOG_ERROR("ArmorDetector missing SKD host-tail buffers");
+        XR_LOG_ERROR("ArmorDetector missing int8 host-tail buffers");
         return false;
       }
       switch (first_it->second.format_type)
       {
         case HAILO_FORMAT_TYPE_UINT8:
-          return FuseSkdHostTailOutputs<uint8_t>(hailo_output_buffers_, output);
+          return FuseInt8HostTailOutputs<uint8_t>(hailo_output_buffers_, output);
         case HAILO_FORMAT_TYPE_UINT16:
-          return FuseSkdHostTailOutputs<uint16_t>(hailo_output_buffers_, output);
+          return FuseInt8HostTailOutputs<uint16_t>(hailo_output_buffers_, output);
         case HAILO_FORMAT_TYPE_FLOAT32:
-          return FuseSkdHostTailOutputs<float>(hailo_output_buffers_, output);
+          return FuseInt8HostTailOutputs<float>(hailo_output_buffers_, output);
         default:
-          XR_LOG_ERROR("ArmorDetector unsupported SKD host-tail format: %d",
+          XR_LOG_ERROR("ArmorDetector unsupported int8 host-tail format: %d",
                        static_cast<int>(first_it->second.format_type));
           return false;
       }
     }
 
-    XR_LOG_ERROR("ArmorDetector unsupported SKD Hailo output topology: outputs=%zu",
+    XR_LOG_ERROR("ArmorDetector unsupported int8 Hailo output topology: outputs=%zu",
                  hailo_output_infos_.size());
     return false;
   }
 
-  bool FuseHailoOutputs(cv::Mat& output)
+  bool BuildInt16HailoOutput(cv::Mat& output)
   {
     output.create(CandidateCount(), OutputWidth(), CV_32F);
     int row = 0;
@@ -1800,8 +1415,8 @@ class ArmorDetectorNetwork
     for (int row = 0; row < preview_rows; ++row)
     {
       const float* data = output.ptr<float>(row);
-      const detail::ModelOutputView output_view(output, model_candidate_count,
-                                                model_output_width);
+      const detail::ModelOutputView output_view(output, detail::int16_candidate_count,
+                                                detail::int16_output_width);
       const int raw_color_id =
           detail::ArgMaxOutputRange(output_view, row, 9, 13);
       const int raw_class_id =
@@ -1815,28 +1430,12 @@ class ArmorDetectorNetwork
 #endif
 
   DetectorBackendKind backend_kind_{DetectorBackendKind::NONE};
-  ModelFamily model_family_{ModelFamily::SZU};
+  infer::ModelLine model_line_{infer::ModelLine::INT16};
   std::string backend_name_{"NONE"};
-  std::string requested_backend_name_{"AUTO_DETECT"};
-  std::string requested_device_name_{"AUTO_DETECT"};
-  std::string performance_mode_name_{"LATENCY"};
-  std::string openvino_model_path_{};
   std::string hailort_hef_path_{};
-  std::string hailort_tail_onnx_path_{};
   bool model_ready_{false};
   NetworkInputShape input_shape_{};
   HailoTimingSnapshot last_hailo_timing_{};
-  bool hailort_tail_ready_{false};
-  cv::dnn::Net hailort_tail_net_{};
-
-#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
-  std::vector<std::string> available_device_names_{};
-  std::string device_name_{"CPU"};
-  ov::Core ov_core_{};
-  ov::CompiledModel compiled_model_{};
-  ov::InferRequest infer_request_{};
-  ov::Tensor output_tensor_{};
-#endif
 
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
   std::unique_ptr<hailort::Hef> hailo_hef_{};

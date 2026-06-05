@@ -71,39 +71,27 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   preview_.Stop();
   preview_.Start(cfg_.preview);
 
-  const auto* resolved_model = detail::resolve_detector_model(cfg_.network.model);
+  const auto* resolved_model = infer::resolve_detector_model(cfg_.network.model);
   if (resolved_model == nullptr)
   {
     XR_LOG_ERROR(
         "ArmorDetector unknown model enum=%u, fallback to default %s",
         static_cast<unsigned>(cfg_.network.model),
-        detail::detector_model_name(detail::default_detector_model));
+        infer::detector_model_name(infer::default_detector_model));
   }
   const auto& resolved =
-      detail::resolve_detector_model_or_default(cfg_.network.model);
-
-  const char* model_family =
-      detail::model_family_name(resolved.family);
-  const char* model_path = resolved.openvino_model_path;
-  const char* backend_name = resolved.forced_backend;
-  const char* openvino_device = "AUTO_DETECT";
-  const char* openvino_performance_mode = "LATENCY";
-  const char* hailort_hef_path = resolved.hailort_hef_path;
-  const char* hailort_tail_onnx_path = resolved.hailort_tail_onnx_path;
+      infer::resolve_detector_model_or_default(cfg_.network.model);
 
   XR_LOG_INFO(
-      "ArmorDetector model=%s family=%s backend=%s model_path=%s hef_path=%s tail_onnx=%s",
+      "ArmorDetector model=%s line=%s hef_path=%s",
       resolved.canonical_name,
-      model_family, backend_name, model_path, hailort_hef_path,
-      hailort_tail_onnx_path);
+      infer::model_line_name(resolved.line), resolved.hailort_hef_path);
   XR_LOG_INFO(
       "ArmorDetector decode logit=%.3f confidence=%.3f nms=%.3f bbox_expand=%.3f max_det=%d",
       cfg_.network.logit_threshold, cfg_.network.min_confidence,
       cfg_.network.nms_threshold, cfg_.network.bbox_expand,
       cfg_.network.max_detections);
-  network_.Configure(model_family, backend_name, model_path, openvino_device,
-                     openvino_performance_mode, hailort_hef_path,
-                     hailort_tail_onnx_path);
+  network_.Configure(resolved);
 }
 
 /**

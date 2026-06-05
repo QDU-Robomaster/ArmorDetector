@@ -8,7 +8,7 @@
 /**
  * @brief 对单帧图像执行网络 detector 主流程。
  *
- * 该函数负责网络输入构建、OpenVINO 推理和输出解码。
+ * 该函数负责网络输入构建、HailoRT 推理和输出解码。
  * 语义过滤和尺寸类型判定在 DecodeOutput() 内完成。
  *
  * @tparam CameraInfoV 编译期相机参数。
@@ -179,22 +179,16 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
 {
   std::vector<NetworkDetection> detections;
 
-  const auto family =
-      detail::resolve_detector_model_or_default(cfg_.network.model).family;
-  const int candidate_count =
-      family == detail::ModelFamily::SKD ? detail::skd_candidate_count
-                                         : detail::model_candidate_count;
-  const int output_width =
-      family == detail::ModelFamily::SKD ? detail::skd_output_width
-                                         : detail::model_output_width;
-  const detail::ModelOutputView output_view(output, candidate_count, output_width);
+  const auto& adapter = infer::resolve_model_infer_adapter(cfg_.network.model);
+  const detail::ModelOutputView output_view(
+      output, adapter.candidate_count, adapter.output_width);
   if (!output_view.Valid())
   {
     const auto input_shape = network_.InputShape();
     XR_LOG_ERROR(
         "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=%dx%d input=%dx%d",
-        output.rows, output.cols, output.type(), candidate_count,
-        output_width, input_shape.width, input_shape.height);
+        output.rows, output.cols, output.type(), adapter.candidate_count,
+        adapter.output_width, input_shape.width, input_shape.height);
     ++counters_.discarded_count;
     return {};
   }
@@ -209,9 +203,8 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
     const float objectness_logit = output_view.At(row, 8);
     max_objectness_logit = std::max(max_objectness_logit, objectness_logit);
     const int raw_color_id =
-        detail::ArgMaxOutputRange(
-            output_view, row, family == detail::ModelFamily::SKD ? 17 : 9,
-            family == detail::ModelFamily::SKD ? 19 : 13);
+        detail::ArgMaxOutputRange(output_view, row, adapter.raw_color_begin,
+                                  adapter.raw_color_end);
     if (raw_color_id >= 0 && raw_color_id < static_cast<int>(raw_color_hist.size()))
     {
       ++raw_color_hist[static_cast<std::size_t>(raw_color_id)];
@@ -221,8 +214,7 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
                                                    : detail::default_logit_threshold))
     {
       ++objectness_pass_count;
-      if (family == detail::ModelFamily::SKD ||
-          (raw_color_id != 2 && raw_color_id != 3))
+      if (!infer::reject_raw_color(adapter, raw_color_id))
       {
         ++raw_color_keep_count;
       }
@@ -414,9 +406,7 @@ std::vector<int> ArmorDetector<CameraInfoV>::SelectDetectionsAfterOpenCvNms(
 /**
  * @brief 解码当前 detector 模型的一行输出。
  *
- * 该 decoder 使用当前模型约定：RGB HWC UINT8 输入、objectness raw logit、
- * raw color 0/1 映射到公开颜色枚举、raw color 2/3 直接拒绝、9-class tag
- * 映射到公开编号枚举，角点按模型原顺序 [0,3,2,1] 转成 TL/TR/BR/BL。
+ * 该 decoder 按当前模型适配器解释 objectness、颜色、编号和角点顺序。
  */
 template <CameraTypes::CameraInfo CameraInfoV>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
@@ -440,8 +430,7 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
     const detail::NetworkInputMapping& mapping, FieldReader&& read,
     int field_count) const
 {
-  const auto family =
-      detail::resolve_detector_model_or_default(cfg_.network.model).family;
+  const auto& adapter = infer::resolve_model_infer_adapter(cfg_.network.model);
   const float objectness_logit = read(8);
   const double logit_threshold =
       cfg_.network.logit_threshold > 0.0
@@ -458,16 +447,15 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
           {
             return read(field);
           },
-          family == detail::ModelFamily::SKD ? 17 : 9,
-          family == detail::ModelFamily::SKD ? 19 : 13);
+          adapter.raw_color_begin, adapter.raw_color_end);
   const int raw_class_id =
       detail::ArgMaxFieldRange(
           [&read](int field)
           {
             return read(field);
           },
-          family == detail::ModelFamily::SKD ? 9 : 13,
-          family == detail::ModelFamily::SKD ? 17 : field_count);
+          adapter.raw_class_begin,
+          std::min(adapter.raw_class_end, field_count));
 
   std::array<cv::Point2f, 4> declared_points{};
   for (int point_index = 0; point_index < 4; ++point_index)
@@ -478,11 +466,7 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
         mapping.MapToSource(x, y);
   }
 
-  const auto points =
-      family == detail::ModelFamily::SKD
-          ? std::array<cv::Point2f, 4>{declared_points[0], declared_points[1],
-                                       declared_points[3], declared_points[2]}
-          : detail::model_points_to_canonical(declared_points);
+  const auto points = infer::canonicalize_points(adapter, declared_points);
   if (cfg_.network.enable_quad_check &&
       !detail::IsUsableQuad(points, cfg_.network.min_quad_area_px))
   {
@@ -490,22 +474,14 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
   }
 
   NetworkDetection detection;
-  if (family != detail::ModelFamily::SKD &&
-      (raw_color_id == 2 || raw_color_id == 3))
+  if (infer::reject_raw_color(adapter, raw_color_id))
   {
     return std::nullopt;
   }
-  detection.color =
-      family == detail::ModelFamily::SKD
-          ? detail::color_from_skd_model_id(raw_color_id)
-          : detail::color_from_model_id(raw_color_id);
-  detection.number =
-      family == detail::ModelFamily::SKD
-          ? detail::number_from_skd_model_class_id(raw_class_id)
-          : detail::number_from_model_class_id(raw_class_id);
+  detection.color = adapter.decode_color(raw_color_id);
+  detection.number = adapter.decode_number(raw_class_id);
   detection.confidence =
-      family == detail::ModelFamily::SKD ? objectness_logit
-                                         : detail::Sigmoid(objectness_logit);
+      infer::decode_confidence(adapter, objectness_logit);
   detection.points = points;
   const double bbox_expand =
       cfg_.network.bbox_expand >= 0.0 ? cfg_.network.bbox_expand

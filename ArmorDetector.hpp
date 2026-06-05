@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: 基于 OpenVINO 的装甲板检测和 PnP 位姿估计
+module_description: 基于 HailoRT 的装甲板检测和 PnP 位姿估计
 constructor_args:
   cfg:
     detect_color: 1
@@ -79,36 +79,28 @@ depends:
 #include "libxr.hpp"
 #include "logger.hpp"
 #include "ArmorDetectorPnPSolver.hpp"
+#include "infer/ArmorDetectorModelAdapter.hpp"
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
 #include "VisionPreview.hpp"
 
-#ifndef ARMOR_DETECTOR_MODEL_PATH
-#define ARMOR_DETECTOR_MODEL_PATH ""
+#ifndef ARMOR_DETECTOR_INT8_HEAD_L_HEF_PATH
+#define ARMOR_DETECTOR_INT8_HEAD_L_HEF_PATH ""
 #endif
-#ifndef ARMOR_DETECTOR_SKD_MODEL_PATH
-#define ARMOR_DETECTOR_SKD_MODEL_PATH ""
+#ifndef ARMOR_DETECTOR_INT8_GRID_L_HEF_PATH
+#define ARMOR_DETECTOR_INT8_GRID_L_HEF_PATH ""
 #endif
-#ifndef ARMOR_DETECTOR_SKD_INT8_HEAD_L_HEF_PATH
-#define ARMOR_DETECTOR_SKD_INT8_HEAD_L_HEF_PATH ""
+#ifndef ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH
+#define ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH ""
 #endif
-#ifndef ARMOR_DETECTOR_SKD_INT8_GRID_L_HEF_PATH
-#define ARMOR_DETECTOR_SKD_INT8_GRID_L_HEF_PATH ""
+#ifndef ARMOR_DETECTOR_INT8_HEAD_HEF_PATH
+#define ARMOR_DETECTOR_INT8_HEAD_HEF_PATH ""
 #endif
-#ifndef ARMOR_DETECTOR_SZU_INT16_HEAD_L_HEF_PATH
-#define ARMOR_DETECTOR_SZU_INT16_HEAD_L_HEF_PATH ""
+#ifndef ARMOR_DETECTOR_INT8_GRID_HEF_PATH
+#define ARMOR_DETECTOR_INT8_GRID_HEF_PATH ""
 #endif
-#ifndef ARMOR_DETECTOR_SKD_INT8_HEAD_HEF_PATH
-#define ARMOR_DETECTOR_SKD_INT8_HEAD_HEF_PATH ""
-#endif
-#ifndef ARMOR_DETECTOR_SKD_INT8_GRID_HEF_PATH
-#define ARMOR_DETECTOR_SKD_INT8_GRID_HEF_PATH ""
-#endif
-#ifndef ARMOR_DETECTOR_SZU_INT16_HEAD_HEF_PATH
-#define ARMOR_DETECTOR_SZU_INT16_HEAD_HEF_PATH ""
-#endif
-#ifndef ARMOR_DETECTOR_SZU_TAIL_ONNX_PATH
-#define ARMOR_DETECTOR_SZU_TAIL_ONNX_PATH ""
+#ifndef ARMOR_DETECTOR_INT16_HEAD_HEF_PATH
+#define ARMOR_DETECTOR_INT16_HEAD_HEF_PATH ""
 #endif
 /**
  * @brief 装甲板检测应用模块。
