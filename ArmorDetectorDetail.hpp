@@ -175,8 +175,8 @@ class ModelOutputView
     const Eigen::Index length = static_cast<Eigen::Index>(end - begin);
     if (transposed_)
     {
-      mapped.block(static_cast<Eigen::Index>(begin),
-                   static_cast<Eigen::Index>(row), length, 1)
+      mapped.col(static_cast<Eigen::Index>(row))
+          .segment(static_cast<Eigen::Index>(begin), length)
           .maxCoeff(&index);
     }
     else
