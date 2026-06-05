@@ -7,17 +7,10 @@ constructor_args:
   cfg:
     detect_color: 1
     network:
-      model_family: "SZU"
-      model_variant: ""
+      model_name: "int16-head-l"
       min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
-      openvino_model_path: ""
-      backend: "AUTO_DETECT"
-      openvino_device: "AUTO_DETECT"
-      openvino_performance_mode: "LATENCY"
-      hailort_hef_path: ""
-      hailort_tail_onnx_path: ""
       logit_threshold: 0.619
       nms_threshold: 0.45
       bbox_expand: 0.1
@@ -154,22 +147,11 @@ class ArmorDetector : public LibXR::Application
    */
   struct NetworkParams
   {
-    const char* model_family{"SZU"};     ///< detector 模型族：SZU / SKD。
+    /// 固定模型名：int8-head-l / int8-grid-l / int16-head-l / int8-head / int8-grid / int16-head。
+    const char* model_name{"int16-head-l"};
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
-    /// 可选 OpenVINO 模型路径；为空时按 model_family 走默认内置路径。
-    const char* openvino_model_path{""};
-    /// OpenVINO 编译设备；"AUTO_DETECT" 按 NPU、GPU、CPU 顺序自动选择。
-    const char* openvino_device{"AUTO_DETECT"};
-    /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
-    const char* openvino_performance_mode{"LATENCY"};
-    /// 推理后端：AUTO_DETECT / OPENVINO / HAILORT。
-    const char* backend{"AUTO_DETECT"};
-    /// HailoRT HEF 文件路径；仅 HAILORT 后端使用。
-    const char* hailort_hef_path{""};
-    /// Hailo 原始三头输出对应的 ONNX tail 路径；用于把 conv47/54/60 复原成 20160x22。
-    const char* hailort_tail_onnx_path{""};
     /// objectness 原始 logit 门限。
     double logit_threshold{0.619};
     /// OpenCV NMS IoU 门限。
@@ -178,8 +160,6 @@ class ArmorDetector : public LibXR::Application
     double bbox_expand{0.1};
     /// NMS 后最多保留候选数量。
     int max_detections{128};
-    /// 固定模型变体：int8-head-l/int8-grid-l/int16-head-l/int8-head/int8-grid/int16-head。
-    const char* model_variant{""};
   };
 
   /**

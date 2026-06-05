@@ -71,78 +71,34 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   preview_.Stop();
   preview_.Start(cfg_.preview);
 
-  const auto* resolved_variant =
-      detail::resolve_model_variant(cfg_.network.model_variant);
-  if (cfg_.network.model_variant != nullptr &&
-      cfg_.network.model_variant[0] != '\0' &&
-      resolved_variant == nullptr)
+  const auto* resolved_model =
+      detail::resolve_detector_model(cfg_.network.model_name);
+  if (cfg_.network.model_name != nullptr &&
+      cfg_.network.model_name[0] != '\0' &&
+      resolved_model == nullptr)
   {
-    XR_LOG_ERROR("ArmorDetector unknown model_variant=%s, falling back to legacy config fields",
-                 cfg_.network.model_variant);
+    XR_LOG_ERROR(
+        "ArmorDetector unknown model_name=%s, fallback to default %s",
+        cfg_.network.model_name,
+        detail::default_detector_model_name);
   }
+  const auto& resolved =
+      detail::resolve_detector_model_or_default(cfg_.network.model_name);
 
   const char* model_family =
-      (resolved_variant != nullptr)
-          ? detail::model_family_name(resolved_variant->family)
-          : cfg_.network.model_family;
-  if (model_family == nullptr || model_family[0] == '\0')
-  {
-    model_family = "SZU";
-  }
-
-  const bool use_skd_model = std::string(model_family) == "SKD";
-  const char* openvino_model_path =
-      (resolved_variant != nullptr) ? resolved_variant->openvino_model_path
-                                    : cfg_.network.openvino_model_path;
-  if (openvino_model_path == nullptr)
-  {
-    openvino_model_path = "";
-  }
-  const char* model_path =
-      openvino_model_path[0] != '\0'
-          ? openvino_model_path
-          : (use_skd_model ? ARMOR_DETECTOR_SKD_MODEL_PATH
-                           : ARMOR_DETECTOR_MODEL_PATH);
-
-  const char* backend_name =
-      (resolved_variant != nullptr) ? resolved_variant->forced_backend
-                                    : cfg_.network.backend;
-  if (backend_name == nullptr || backend_name[0] == '\0')
-  {
-    backend_name = "AUTO_DETECT";
-  }
-
-  const char* openvino_device = cfg_.network.openvino_device;
-  if (openvino_device == nullptr || openvino_device[0] == '\0')
-  {
-    openvino_device = "CPU";
-  }
-  const char* openvino_performance_mode = cfg_.network.openvino_performance_mode;
-  if (openvino_performance_mode == nullptr ||
-      openvino_performance_mode[0] == '\0')
-  {
-    openvino_performance_mode = "LATENCY";
-  }
-  const char* hailort_hef_path =
-      (resolved_variant != nullptr) ? resolved_variant->hailort_hef_path
-                                    : cfg_.network.hailort_hef_path;
-  if (hailort_hef_path == nullptr)
-  {
-    hailort_hef_path = "";
-  }
-  const char* hailort_tail_onnx_path =
-      (resolved_variant != nullptr) ? resolved_variant->hailort_tail_onnx_path
-                                    : cfg_.network.hailort_tail_onnx_path;
-  if (hailort_tail_onnx_path == nullptr)
-  {
-    hailort_tail_onnx_path = "";
-  }
+      detail::model_family_name(resolved.family);
+  const char* model_path = resolved.openvino_model_path;
+  const char* backend_name = resolved.forced_backend;
+  const char* openvino_device = "AUTO_DETECT";
+  const char* openvino_performance_mode = "LATENCY";
+  const char* hailort_hef_path = resolved.hailort_hef_path;
+  const char* hailort_tail_onnx_path = resolved.hailort_tail_onnx_path;
 
   XR_LOG_INFO(
-      "ArmorDetector variant=%s family=%s backend=%s model_path=%s hef_path=%s tail_onnx=%s device=%s mode=%s",
-      (resolved_variant != nullptr) ? resolved_variant->canonical_name : "",
+      "ArmorDetector model_name=%s family=%s backend=%s model_path=%s hef_path=%s tail_onnx=%s",
+      resolved.canonical_name,
       model_family, backend_name, model_path, hailort_hef_path,
-      hailort_tail_onnx_path, openvino_device, openvino_performance_mode);
+      hailort_tail_onnx_path);
   XR_LOG_INFO(
       "ArmorDetector decode logit=%.3f confidence=%.3f nms=%.3f bbox_expand=%.3f max_det=%d",
       cfg_.network.logit_threshold, cfg_.network.min_confidence,

@@ -34,7 +34,7 @@
 
 数字 refine 模型使用 OpenCV DNN CPU 后处理。它只在检测候选已经成立后运行，用数字 ROI 的分类结果覆盖 detector 编号；置信度不够或尺寸类型冲突时不会覆盖。
 
-Hailo 路线现在支持固定 `model_variant` 选择，不必再手写外部 HEF 路径。当前临时接受的 `6` 个变体是：
+Hailo 路线现在只通过固定 `model_name` 选择。当前临时接受的 `6` 个名字是：
 
 - `int8-head-l`
 - `int8-grid-l`
@@ -85,9 +85,7 @@ Hailo 路线现在支持固定 `model_variant` 选择，不必再手写外部 HE
 - `network.max_detections`：NMS 后最多保留候选数量。
 - `network.enable_quad_check`：是否检查四边形面积和基本形状。
 - `network.min_quad_area_px`：四边形最小面积，单位 `px^2`。
-- `network.model_variant`：固定 Hailo 变体入口；设置后会覆盖 `model_family/backend/hailort_hef_path/hailort_tail_onnx_path` 的常规组合。
-- `network.openvino_device`：`AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`。
-- `network.openvino_performance_mode`：`LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`。
+- `network.model_name`：固定 detector 模型名；当前接受 `int8-head-l / int8-grid-l / int16-head-l / int8-head / int8-grid / int16-head`。
 - `number_refine.enabled`：是否启用数字 refine。
 - `number_refine.detector_min_confidence`：允许进入数字 refine 的 detector 最低置信度。
 - `number_refine.classifier_min_confidence`：允许覆盖 detector 编号的分类器最低置信度。
