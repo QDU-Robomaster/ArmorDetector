@@ -25,9 +25,7 @@
 
 ## 模型
 
-当前模块只保留稳定的 Hailo detector 工件，不再自带旧的 detector / refine 模型。
-
-Hailo 路线现在只通过固定 `network.model` 枚举选择。当前临时接受的 `6` 个枚举值是：
+Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的 `6` 个枚举值是：
 
 - `ArmorDetectorModel::INT8_HEAD_L`
 - `ArmorDetectorModel::INT8_GRID_L`
@@ -57,8 +55,6 @@ Hailo 路线现在只通过固定 `network.model` 枚举选择。当前临时接
 - `INT8_HEAD*`：`int8` 六输出 host-tail 语义
 - `INT8_GRID*`：`int8` 单输出 `21x6720` 语义
 - `INT16_HEAD*`：`int16` 三头 `conv47/54/60` 语义
-
-`int16-box*` 当前不在接受集合里，不建议配置进当前 detector。
 
 ## 结果内容
 
@@ -93,8 +89,6 @@ Hailo 路线现在只通过固定 `network.model` 枚举选择。当前临时接
 network:
   model: {expr: ArmorDetectorModel::INT8_GRID_L}
 ```
-
-`number_refine.*` 仍可能出现在旧 BSP 配置里，但当前模块不会再加载旧 refine 模型，也不会执行这条链路。
 
 ## 预览
 
