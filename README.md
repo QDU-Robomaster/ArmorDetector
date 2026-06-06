@@ -1,12 +1,12 @@
 # ArmorDetector
 
-`ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用 OpenVINO 模型检测装甲板四角点，再根据相机内参求出装甲板在相机坐标系下的位姿。模块输出会保留当前同步帧引用，供 `ArmorTracker` 在同进程回调里立刻使用。
+`ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用 HailoRT 模型检测装甲板四角点，再根据相机内参求出装甲板在相机坐标系下的位姿。模块输出会保留当前同步帧引用，供 `ArmorTracker` 在同进程回调里立刻使用。
 
 ## 数据流
 
 1. 读取 `CameraFrameSync<Info>::SyncedFrame`。
 2. 将图像缩放到模型输入尺寸，并从 BGR 转成 RGB。
-3. 执行 OpenVINO 推理，解码颜色、编号、置信度和四角点。
+3. 执行 HailoRT 推理，按当前模型适配器解码颜色、编号、置信度和四角点。
 4. 过滤低置信度、颜色不匹配、编号无效或几何异常的候选。
 5. 对有效候选执行 PnP，发布 `armor_detector/armors_frame`。
 
@@ -25,14 +25,36 @@
 
 ## 模型
 
-默认模型文件：
+Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的 `6` 个枚举值是：
 
-- `model/armor_detector_640x512.onnx`
-- `model/armor_number_mlp.onnx`
+- `ArmorDetectorModel::INT8_HEAD_L`
+- `ArmorDetectorModel::INT8_GRID_L`
+- `ArmorDetectorModel::INT16_HEAD_L`
+- `ArmorDetectorModel::INT8_HEAD`
+- `ArmorDetectorModel::INT8_GRID`
+- `ArmorDetectorModel::INT16_HEAD`
 
-主检测模型输入为 `640x512` RGB 图像，输出为 `20160x22` 候选矩阵。候选字段包含 objectness、四角点、颜色和编号类别。解码后会把网络输入坐标映射回原始相机图像坐标。
+这些变体都已经映射到模块目录下的稳定工件文件名：
 
-数字 refine 模型使用 OpenCV DNN CPU 后处理。它只在检测候选已经成立后运行，用数字 ROI 的分类结果覆盖 detector 编号；置信度不够或尺寸类型冲突时不会覆盖。
+- `model/skd_int8_head_l.hef`
+- `model/skd_int8_grid_l.hef`
+- `model/szu_int16_head_l.hef`
+- `model/skd_int8_head.hef`
+- `model/skd_int8_grid.hef`
+- `model/szu_int16_head.hef`
+
+`infer/` 目录负责不同模型的适配：
+
+- `infer/ArmorDetectorModelRegistry.hpp`：模型枚举到稳定 HEF 的映射
+- `infer/ArmorDetectorInt8Model.hpp`：`int8` 线输出语义适配
+- `infer/ArmorDetectorInt16Model.hpp`：`int16` 线输出语义适配
+- `infer/ArmorDetectorModelAdapter.hpp`：统一的模型适配入口
+
+其中：
+
+- `INT8_HEAD*`：`int8` 六输出 host-tail 语义
+- `INT8_GRID*`：`int8` 单输出 `21x6720` 语义
+- `INT16_HEAD*`：`int16` 三头 `conv47/54/60` 语义
 
 ## 结果内容
 
@@ -59,12 +81,14 @@
 - `network.max_detections`：NMS 后最多保留候选数量。
 - `network.enable_quad_check`：是否检查四边形面积和基本形状。
 - `network.min_quad_area_px`：四边形最小面积，单位 `px^2`。
-- `network.openvino_device`：`AUTO_DETECT`、`CPU`、`GPU`、`NPU`、`AUTO:*` 或 `MULTI:*`。
-- `network.openvino_performance_mode`：`LATENCY`、`THROUGHPUT` 或 `CUMULATIVE_THROUGHPUT`。
-- `number_refine.enabled`：是否启用数字 refine。
-- `number_refine.detector_min_confidence`：允许进入数字 refine 的 detector 最低置信度。
-- `number_refine.classifier_min_confidence`：允许覆盖 detector 编号的分类器最低置信度。
-- `number_refine.enforce_type_compatibility`：尺寸类型明确冲突时禁止覆盖编号。
+- `network.model`：固定 detector 模型枚举；当前接受 `ArmorDetectorModel::INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT8_HEAD / INT8_GRID / INT16_HEAD`。
+
+如果配置层需要写显式表达式，直接用：
+
+```yaml
+network:
+  model: {expr: ArmorDetectorModel::INT8_GRID_L}
+```
 
 ## 预览
 

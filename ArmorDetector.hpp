@@ -2,16 +2,15 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: 基于 OpenVINO 的装甲板检测和 PnP 位姿估计
+module_description: 基于 HailoRT 的装甲板检测和 PnP 位姿估计
 constructor_args:
   cfg:
     detect_color: 1
     network:
+      model: ArmorDetectorModel::INT16_HEAD_L
       min_confidence: 0.1
       enable_quad_check: true
       min_quad_area_px: 16.0
-      openvino_device: "AUTO_DETECT"
-      openvino_performance_mode: "LATENCY"
       logit_threshold: 0.619
       nms_threshold: 0.45
       bbox_expand: 0.1
@@ -30,11 +29,6 @@ constructor_args:
       web_port: 8080
       web_stream_name: "armor_detector"
       max_fps: 30.0
-    number_refine:
-      enabled: true
-      detector_min_confidence: 0.2
-      classifier_min_confidence: 0.9
-      enforce_type_compatibility: true
   sync: '@camera_frame_sync'
 template_args:
   - Info:
@@ -64,7 +58,10 @@ depends:
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <thread>
@@ -82,16 +79,28 @@ depends:
 #include "libxr.hpp"
 #include "logger.hpp"
 #include "ArmorDetectorPnPSolver.hpp"
+#include "infer/ArmorDetectorModelAdapter.hpp"
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
-#include "ArmorDetectorNumberRefiner.hpp"
 #include "VisionPreview.hpp"
 
-#ifndef ARMOR_DETECTOR_MODEL_PATH
-#error "ARMOR_DETECTOR_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
+#ifndef ARMOR_DETECTOR_INT8_HEAD_L_HEF_PATH
+#define ARMOR_DETECTOR_INT8_HEAD_L_HEF_PATH ""
 #endif
-#ifndef ARMOR_DETECTOR_NUMBER_MODEL_PATH
-#error "ARMOR_DETECTOR_NUMBER_MODEL_PATH must be defined by ArmorDetector CMakeLists.txt."
+#ifndef ARMOR_DETECTOR_INT8_GRID_L_HEF_PATH
+#define ARMOR_DETECTOR_INT8_GRID_L_HEF_PATH ""
+#endif
+#ifndef ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH
+#define ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH ""
+#endif
+#ifndef ARMOR_DETECTOR_INT8_HEAD_HEF_PATH
+#define ARMOR_DETECTOR_INT8_HEAD_HEF_PATH ""
+#endif
+#ifndef ARMOR_DETECTOR_INT8_GRID_HEF_PATH
+#define ARMOR_DETECTOR_INT8_GRID_HEF_PATH ""
+#endif
+#ifndef ARMOR_DETECTOR_INT16_HEAD_HEF_PATH
+#define ARMOR_DETECTOR_INT16_HEAD_HEF_PATH ""
 #endif
 /**
  * @brief 装甲板检测应用模块。
@@ -130,13 +139,11 @@ class ArmorDetector : public LibXR::Application
    */
   struct NetworkParams
   {
+    /// 固定模型枚举：INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT8_HEAD / INT8_GRID / INT16_HEAD。
+    ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
     double min_quad_area_px{16.0};       ///< 网络四边形最小面积，单位 px^2。
-    /// OpenVINO 编译设备；"AUTO_DETECT" 按 NPU、GPU、CPU 顺序自动选择。
-    const char* openvino_device{"AUTO_DETECT"};
-    /// OpenVINO 性能模式，例如 "LATENCY"、"THROUGHPUT"、"CUMULATIVE_THROUGHPUT"。
-    const char* openvino_performance_mode{"LATENCY"};
     /// objectness 原始 logit 门限。
     double logit_threshold{0.619};
     /// OpenCV NMS IoU 门限。
@@ -148,18 +155,17 @@ class ArmorDetector : public LibXR::Application
   };
 
   /**
-   * @brief 数字分类器后 refine 参数。
+   * @brief 兼容旧配置的 refine 参数占位。
    *
-   * 该阶段只在 detector 已经输出有效装甲板后运行。detector_min_confidence
-   * 控制哪些候选允许进入 refine；classifier_min_confidence 控制 MLP 输出是否
-   * 能覆盖 detector 编号。MLP 的 negative 类只表示“不覆盖”，不会删除候选。
+   * 当前 detector 已不再执行 number refine；保留该结构仅用于兼容旧 YAML 和
+   * 已生成配置，运行时会忽略这些字段。
    */
   struct NumberRefineParams
   {
-    bool enabled{true};                    ///< 是否启用 MLP 数字后 refine。
-    double detector_min_confidence{0.2};   ///< detector 候选进入 refine 的最低置信度。
-    double classifier_min_confidence{0.9}; ///< MLP 覆盖 detector 编号的最低置信度。
-    bool enforce_type_compatibility{true}; ///< 几何尺寸明确冲突时不覆盖编号。
+    bool enabled{false};
+    double detector_min_confidence{0.0};
+    double classifier_min_confidence{0.0};
+    bool enforce_type_compatibility{false};
   };
 
   /**
@@ -173,7 +179,7 @@ class ArmorDetector : public LibXR::Application
     const char* referee_domain{"host"};  ///< 裁判系统所在主题域。
     const char* referee_topic{"sentry_ref"}; ///< 裁判系统摘要包主题名。
     VisionPreview::RuntimeParam preview{}; ///< 可选实时预览配置。
-    NumberRefineParams number_refine{}; ///< 可选 MLP 数字后 refine 配置。
+    NumberRefineParams number_refine{}; ///< 兼容旧配置；当前不生效。
   };
 
   /**
@@ -263,6 +269,11 @@ class ArmorDetector : public LibXR::Application
     uint32_t semantic_discard_count{0};   ///< 语义过滤丢弃数量。
     uint32_t type_discard_count{0};       ///< 类型一致性过滤丢弃数量。
     double max_objectness{0.0};           ///< 本帧网络最大目标置信度。
+    double preprocess_latency_ms{0.0};    ///< resize+BGR2RGB 等前处理耗时。
+    double infer_latency_ms{0.0};         ///< network_.Infer() 总耗时。
+    double postprocess_latency_ms{0.0};   ///< DecodeOutput/NMS/语义过滤耗时。
+    double hailo_infer_latency_ms{0.0};   ///< Hailo 设备推理耗时，单位 ms。
+    double hailo_tail_latency_ms{0.0};    ///< Hailo 输出融合耗时，单位 ms。
     double detector_latency_ms{0.0};      ///< 网络检测和候选过滤耗时，单位 ms。
     double result_latency_ms{0.0};        ///< PnP 和结果填充耗时，单位 ms。
   };
@@ -303,6 +314,12 @@ class ArmorDetector : public LibXR::Application
                             detail::NetworkInputMapping& mapping) const;
 
   /**
+   * @brief 在环境变量启用时一次性导出 Infer() 后的矩阵输出。
+   * @param output 当前 detector 矩阵输出。
+   */
+  void MaybeDumpModelOutput(const cv::Mat& output);
+
+  /**
    * @brief 解码网络输出并执行 NMS、语义过滤和类型判定。
    * @param mapping 网络输入到源图像的坐标映射。
    * @param output 网络输出矩阵。
@@ -311,6 +328,18 @@ class ArmorDetector : public LibXR::Application
   std::vector<CandidateArmor> DecodeOutput(
       const cv::Mat& raw_img, const detail::NetworkInputMapping& mapping,
       const cv::Mat& output);
+
+  /**
+   * @brief 对已经解码的网络候选执行 NMS、语义过滤和类型判定。
+   * @param raw_img 当前源图像。
+   * @param detections 已通过网络基础门限和角点检查的候选。
+   * @return 有效装甲板候选。
+   */
+  std::vector<CandidateArmor> FinalizeDetections(
+      const cv::Mat& raw_img, std::vector<NetworkDetection>&& detections);
+  void SuppressNearDuplicateDetections(
+      const std::vector<NetworkDetection>& detections,
+      std::vector<int>& indices) const;
 
   /**
    * @brief 对网络候选执行 OpenCV NMS。
@@ -332,6 +361,18 @@ class ArmorDetector : public LibXR::Application
       const detail::ModelOutputView& output, int row) const;
 
   /**
+   * @brief 从当前 detector family 的一行字段直接解码候选。
+   * @param mapping 网络输入到源图像的坐标映射。
+   * @param read 字段读取器，接受 field 索引并返回 float。
+   * @param field_count 当前行字段数。
+   * @return 通过门限和四边形检查时返回检测单元。
+   */
+  template <typename FieldReader>
+  std::optional<NetworkDetection> DecodeModelDetectionFromFields(
+      const detail::NetworkInputMapping& mapping, FieldReader&& read,
+      int field_count) const;
+
+  /**
    * @brief 将网络检测单元转换为内部候选并计算基础几何指标。
    * @param detection 网络检测单元。
    * @return 内部装甲板候选。
@@ -350,23 +391,6 @@ class ArmorDetector : public LibXR::Application
    * @return ratio 明确时返回 LARGE/SMALL，处于灰区时返回 INVALID。
    */
   ArmorType GeometryTypeHint(const CandidateArmor& armor) const;
-
-  /**
-   * @brief 判断分类器输出是否与明确几何尺寸冲突。
-   * @param number 分类器输出编号。
-   * @param armor 当前候选。
-   * @return 未冲突时返回 true。
-   */
-  bool RefinedNumberCompatibleWithGeometry(ArmorNumber number,
-                                           const CandidateArmor& armor) const;
-
-  /**
-   * @brief 使用 MLP 对候选编号做后 refine。
-   * @param bgr_img 当前源图像。
-   * @param armor 待 refine 候选。
-   * @return 成功覆盖编号时返回 true。
-   */
-  bool RefineNumberIfConfident(const cv::Mat& bgr_img, CandidateArmor& armor);
 
   /**
    * @brief 检查候选编号先验与尺寸类型是否冲突。
@@ -427,6 +451,12 @@ class ArmorDetector : public LibXR::Application
                          const cv::Mat& bgr_img);
 
   /**
+   * @brief 在环境变量启用时导出最终 detector 结果 TSV。
+   * @param armors 当前帧内部候选。
+   */
+  void MaybeDumpResultsTsv(const std::vector<CandidateArmor>& armors);
+
+  /**
    * @brief 把当前帧交给预览线程绘制检测结果。
    * @param bgr_img 当前 BGR 图像；Submit 内部会立即深拷贝。
    */
@@ -441,8 +471,10 @@ class ArmorDetector : public LibXR::Application
   uint64_t frame_index_{0};              ///< 已处理帧计数。
   std::thread sync_frame_thread_{};      ///< 后台同步帧消费线程。
   FrameCounters counters_{};             ///< 当前帧内部计数器。
-  detail::OpenVinoArmorNetwork network_{}; ///< OpenVINO 网络。
-  detail::MlpNumberRefiner number_refiner_{}; ///< CPU 数字分类后 refine。
+  detail::ArmorDetectorNetwork network_{}; ///< detector 推理后端。
+  double last_preprocess_latency_ms_{0.0};    ///< Detect() 最近一帧前处理耗时。
+  double last_infer_latency_ms_{0.0};         ///< Detect() 最近一帧 network_.Infer 耗时。
+  double last_postprocess_latency_ms_{0.0};   ///< Detect() 最近一帧后处理耗时。
 
   ArmorDetectionsPacket armors_packet_{}; ///< 复用的检测结果包。
   DetectionPacket armors_frame_packet_{}; ///< 复用的带源帧引用结果包。

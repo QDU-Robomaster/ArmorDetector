@@ -1,5 +1,11 @@
 #pragma once
 
+#include <cstdint>
+
+#include <Eigen/Dense>
+
+#include "infer/ArmorDetectorModelRegistry.hpp"
+
 /**
  * @file ArmorDetectorDetail.hpp
  * @brief ArmorDetector 内部使用的模型常量和轻量几何/语义工具。
@@ -13,6 +19,12 @@
 namespace armor_detector_detail
 {
 
+using RowMajorMatrixXf =
+    Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+using RowMajorArrayXXf =
+    Eigen::Array<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+using PointMatrix4x2f = Eigen::Array<float, 4, 2, Eigen::RowMajor>;
+
 /**
  * @brief 当前 detector 模型输入宽度，单位 px。
  */
@@ -24,14 +36,24 @@ constexpr int model_input_width = 640;
 constexpr int model_input_height = 512;
 
 /**
- * @brief 当前 detector 输出候选数量。
+ * @brief `int16` 线 detector 输出候选数量。
  */
-constexpr int model_candidate_count = 20160;
+constexpr int int16_candidate_count = 20160;
 
 /**
- * @brief 当前 detector 单候选字段数量。
+ * @brief `int8` 线 detector 输出候选数量。
  */
-constexpr int model_output_width = 22;
+constexpr int int8_candidate_count = 6720;
+
+/**
+ * @brief `int16` 线 detector 单候选字段数量。
+ */
+constexpr int int16_output_width = 22;
+
+/**
+ * @brief `int8` 线 detector 单候选字段数量。
+ */
+constexpr int int8_output_width = 21;
 
 /**
  * @brief 当前 detector objectness 原始 logit 默认门限。
@@ -99,29 +121,32 @@ struct NetworkInputMapping
 };
 
 /**
- * @brief 当前 detector 20160x22 输出矩阵视图。
+ * @brief 当前 detector 输出矩阵视图。
  *
- * OpenVINO 可能把 [1,20160,22] 暴露成 2D 的 [20160,22] 矩阵。这里同时接受
- * [22,20160] 转置形式，避免不同 OpenVINO 输出展平方式影响解码。
+ * 不同模型适配器可能返回 `[candidate_count, output_width]` 或其转置形式。
+ * 这里统一提供按候选行访问的只读视图。
  */
 class ModelOutputView
 {
  public:
-  explicit ModelOutputView(const cv::Mat& output) : output_(output)
+  explicit ModelOutputView(const cv::Mat& output, int candidate_count,
+                           int output_width)
+      : output_(output), candidate_count_(candidate_count),
+        output_width_(output_width)
   {
     if (output_.type() != CV_32F || output_.dims != 2)
     {
       return;
     }
-    if (output_.rows == model_candidate_count &&
-        output_.cols == model_output_width)
+    if (output_.rows == candidate_count_ &&
+        output_.cols == output_width_)
     {
       valid_ = true;
       transposed_ = false;
       return;
     }
-    if (output_.rows == model_output_width &&
-        output_.cols == model_candidate_count)
+    if (output_.rows == output_width_ &&
+        output_.cols == candidate_count_)
     {
       valid_ = true;
       transposed_ = true;
@@ -132,20 +157,74 @@ class ModelOutputView
 
   [[nodiscard]] int CandidateCount() const
   {
-    return valid_ ? model_candidate_count : 0;
+    return valid_ ? candidate_count_ : 0;
   }
+
+  [[nodiscard]] int OutputWidth() const { return output_width_; }
 
   [[nodiscard]] float At(int row, int field) const
   {
-    return transposed_ ? output_.at<float>(field, row)
-                       : output_.at<float>(row, field);
+    const auto mapped = MatrixMap();
+    return transposed_ ? mapped(field, row) : mapped(row, field);
+  }
+
+  [[nodiscard]] int ArgMaxRange(int row, int begin, int end) const
+  {
+    const auto mapped = MatrixMap();
+    Eigen::Index index = 0;
+    const Eigen::Index length = static_cast<Eigen::Index>(end - begin);
+    if (transposed_)
+    {
+      mapped.col(static_cast<Eigen::Index>(row))
+          .segment(static_cast<Eigen::Index>(begin), length)
+          .maxCoeff(&index);
+    }
+    else
+    {
+      mapped.row(static_cast<Eigen::Index>(row))
+          .segment(static_cast<Eigen::Index>(begin), length)
+          .maxCoeff(&index);
+    }
+    return static_cast<int>(index);
   }
 
  private:
+  [[nodiscard]] Eigen::Map<const RowMajorMatrixXf> MatrixMap() const
+  {
+    return Eigen::Map<const RowMajorMatrixXf>(
+        output_.ptr<float>(), output_.rows, output_.cols);
+  }
+
   const cv::Mat& output_;
+  int candidate_count_{0};
+  int output_width_{0};
   bool valid_{false};
   bool transposed_{false};
 };
+
+/**
+ * @brief 在任意字段读取器的指定范围内取 argmax。
+ * @param read 输入字段读取器，接受 field 索引并返回 float。
+ * @param begin 起始列，闭区间。
+ * @param end 结束列，开区间。
+ * @return 最大值列号减去 begin 后的类别 id。
+ */
+template <typename FieldReader>
+inline int ArgMaxFieldRange(FieldReader&& read, int begin, int end)
+{
+  int best = begin;
+  float best_value = read(begin);
+  for (int index = begin + 1; index < end; ++index)
+  {
+    const float value = read(index);
+    if (value > best_value)
+    {
+      best_value = value;
+      best = index;
+    }
+  }
+  return best - begin;
+}
 
 /**
  * @brief 在输出视图某一候选的指定字段范围内取 argmax。
@@ -158,18 +237,7 @@ class ModelOutputView
 inline int ArgMaxOutputRange(const ModelOutputView& output, int row,
                              int begin, int end)
 {
-  int best = begin;
-  float best_value = output.At(row, begin);
-  for (int index = begin + 1; index < end; ++index)
-  {
-    const float value = output.At(row, index);
-    if (value > best_value)
-    {
-      best_value = value;
-      best = index;
-    }
-  }
-  return best - begin;
+  return output.ArgMaxRange(row, begin, end);
 }
 
 /**
@@ -336,20 +404,6 @@ inline ArmorColor detect_color_from_config(int detect_color)
 }
 
 /**
- * @brief 将网络角点顺序映射到 detector/PnP 统一顺序。
- *
- * detector 统一使用左上、右上、右下、左下。
- *
- * @param keypoints 网络输出的四点。
- * @return 左上、右上、右下、左下顺序。
- */
-inline std::array<cv::Point2f, 4> model_points_to_canonical(
-    const std::array<cv::Point2f, 4>& keypoints)
-{
-  return {keypoints[0], keypoints[3], keypoints[2], keypoints[1]};
-}
-
-/**
  * @brief 将 OpenCV PnP rvec/tvec 转成 LibXR Transform。
  * @param rvec OpenCV 旋转向量。
  * @param tvec OpenCV 平移向量，单位 m。
@@ -382,7 +436,14 @@ inline LibXR::Transform<double> make_pose(const cv::Mat& rvec, const cv::Mat& tv
  */
 inline cv::Point2f quad_center(const std::array<cv::Point2f, 4>& points)
 {
-  return (points[0] + points[1] + points[2] + points[3]) * 0.25F;
+  PointMatrix4x2f point_matrix;
+  for (int index = 0; index < 4; ++index)
+  {
+    point_matrix(index, 0) = points[static_cast<std::size_t>(index)].x;
+    point_matrix(index, 1) = points[static_cast<std::size_t>(index)].y;
+  }
+  const Eigen::Array2f center = point_matrix.colwise().mean();
+  return {center(0), center(1)};
 }
 
 /**
@@ -413,63 +474,28 @@ inline cv::Rect expanded_bounding_rect_from_points(
 }
 
 /**
- * @brief 当前 detector 模型颜色类别映射。
- *
- * 模型原始类别 0/1 分别对应蓝色和红色。原始类别 2/3 当前不进入正式检测结果。
+ * @brief 计算两个整数包围盒的 IoU。
  */
-inline ArmorColor color_from_model_id(int color_id)
+inline float rect_iou(const cv::Rect& lhs, const cv::Rect& rhs)
 {
-  if (color_id == 0)
+  const cv::Rect inter = lhs & rhs;
+  if (inter.width <= 0 || inter.height <= 0)
   {
-    return ArmorColor::BLUE;
-  }
-  if (color_id == 1)
-  {
-    return ArmorColor::RED;
-  }
-  return ArmorColor::UNKNOWN;
-}
-
-/**
- * @brief 当前 detector 模型 9-class tag 映射到 ArmorNumber。
- */
-inline ArmorNumber number_from_model_class_id(int class_id)
-{
-  int tag = class_id;
-  if (tag == 7 || tag == 8)
-  {
-    tag = 9;
-  }
-  else if (tag == 0)
-  {
-    tag = 7;
-  }
-  else if (tag == 6)
-  {
-    tag = 8;
+    return 0.0F;
   }
 
-  switch (tag)
+  const float inter_area =
+      static_cast<float>(inter.width) * static_cast<float>(inter.height);
+  const float lhs_area =
+      static_cast<float>(lhs.width) * static_cast<float>(lhs.height);
+  const float rhs_area =
+      static_cast<float>(rhs.width) * static_cast<float>(rhs.height);
+  const float union_area = lhs_area + rhs_area - inter_area;
+  if (union_area <= 0.0F)
   {
-    case 1:
-      return ArmorNumber::ONE;
-    case 2:
-      return ArmorNumber::TWO;
-    case 3:
-      return ArmorNumber::THREE;
-    case 4:
-      return ArmorNumber::FOUR;
-    case 5:
-      return ArmorNumber::FIVE;
-    case 7:
-      return ArmorNumber::GUARD;
-    case 8:
-      return ArmorNumber::OUTPOST;
-    case 9:
-      return ArmorNumber::BASE;
-    default:
-      return ArmorNumber::UNKNOWN;
+    return 0.0F;
   }
+  return inter_area / union_area;
 }
 
 /**
