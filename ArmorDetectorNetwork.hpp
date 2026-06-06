@@ -135,11 +135,13 @@ class ArmorDetectorNetwork
     if (!model_ready_ || backend_kind_ != DetectorBackendKind::HAILORT ||
         input.empty())
     {
+      last_hailo_timing_ = {};
       return std::nullopt;
     }
     if (input.type() != CV_8UC3)
     {
       XR_LOG_ERROR("ArmorDetector Hailo input type invalid: %d", input.type());
+      last_hailo_timing_ = {};
       return std::nullopt;
     }
 
@@ -184,6 +186,7 @@ class ArmorDetectorNetwork
         default:
           XR_LOG_ERROR("ArmorDetector unsupported Hailo output format in infer path: %d",
                        static_cast<int>(buffer.format_type));
+          last_hailo_timing_ = {};
           return std::nullopt;
       }
     }
@@ -197,6 +200,7 @@ class ArmorDetectorNetwork
       {
         XR_LOG_ERROR("ArmorDetector Hailo inference failed status=%d",
                      static_cast<int>(status));
+        last_hailo_timing_ = {};
         return std::nullopt;
       }
 
@@ -211,6 +215,12 @@ class ArmorDetectorNetwork
             std::chrono::duration<double, std::milli>(infer_end - infer_begin).count();
         const double tail_ms =
             std::chrono::duration<double, std::milli>(tail_end - tail_begin).count();
+        last_hailo_timing_ = {
+            true,
+            infer_ms,
+            tail_ms,
+            infer_ms + tail_ms,
+        };
         if (hailo_timing_count_ <= 5U || (hailo_timing_count_ % 30U) == 0U)
         {
           XR_LOG_INFO(
@@ -218,12 +228,17 @@ class ArmorDetectorNetwork
               hailo_timing_count_, infer_ms, tail_ms, infer_ms + tail_ms);
         }
       }
+      else
+      {
+        last_hailo_timing_ = {};
+      }
       return detections;
     }
     catch (const std::exception& exception)
     {
       XR_LOG_ERROR("ArmorDetector Hailo inference exception: %s",
                    exception.what());
+      last_hailo_timing_ = {};
       return std::nullopt;
     }
 #else
