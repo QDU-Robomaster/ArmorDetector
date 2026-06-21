@@ -5,6 +5,14 @@
 
 #include "ArmorDetectorTypes.hpp"
 
+#ifndef ARMOR_DETECTOR_INT16_FAST_L_HEF_PATH
+#define ARMOR_DETECTOR_INT16_FAST_L_HEF_PATH ""
+#endif
+
+#ifndef ARMOR_DETECTOR_INT16_FAST_HEF_PATH
+#define ARMOR_DETECTOR_INT16_FAST_HEF_PATH ""
+#endif
+
 enum class ArmorDetectorModel : uint8_t
 {
   INT8_HEAD_L = 0,
@@ -13,6 +21,8 @@ enum class ArmorDetectorModel : uint8_t
   INT8_HEAD = 3,
   INT8_GRID = 4,
   INT16_HEAD = 5,
+  INT16_FAST_L = 6,
+  INT16_FAST = 7,
 };
 
 namespace armor_detector_infer
@@ -59,15 +69,19 @@ inline const char* detector_model_name(ArmorDetectorModel model)
     case ArmorDetectorModel::INT8_GRID_L:
       return "int8-grid-l";
     case ArmorDetectorModel::INT16_HEAD_L:
-      return "int16-head-l";
+      return "int16-quality-l";
     case ArmorDetectorModel::INT8_HEAD:
       return "int8-head";
     case ArmorDetectorModel::INT8_GRID:
       return "int8-grid";
     case ArmorDetectorModel::INT16_HEAD:
-      return "int16-head";
+      return "int16-quality";
+    case ArmorDetectorModel::INT16_FAST_L:
+      return "int16-fast-l";
+    case ArmorDetectorModel::INT16_FAST:
+      return "int16-fast";
     default:
-      return "int16-head-l";
+      return "int16-quality-l";
   }
 }
 
@@ -92,10 +106,16 @@ inline const ResolvedDetectorModel* resolve_detector_model(ArmorDetectorModel mo
           ARMOR_DETECTOR_INT8_GRID_L_HEF_PATH,
       },
       {
-          "int16-head-l",
+          "int16-quality-l",
           ArmorDetectorModel::INT16_HEAD_L,
           ModelLine::INT16,
           ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH,
+      },
+      {
+          "int16-fast-l",
+          ArmorDetectorModel::INT16_FAST_L,
+          ModelLine::INT16,
+          ARMOR_DETECTOR_INT16_FAST_L_HEF_PATH,
       },
       {
           "int8-head",
@@ -110,10 +130,16 @@ inline const ResolvedDetectorModel* resolve_detector_model(ArmorDetectorModel mo
           ARMOR_DETECTOR_INT8_GRID_HEF_PATH,
       },
       {
-          "int16-head",
+          "int16-quality",
           ArmorDetectorModel::INT16_HEAD,
           ModelLine::INT16,
           ARMOR_DETECTOR_INT16_HEAD_HEF_PATH,
+      },
+      {
+          "int16-fast",
+          ArmorDetectorModel::INT16_FAST,
+          ModelLine::INT16,
+          ARMOR_DETECTOR_INT16_FAST_HEF_PATH,
       },
   };
 
@@ -125,12 +151,16 @@ inline const ResolvedDetectorModel* resolve_detector_model(ArmorDetectorModel mo
       return &kVariants[1];
     case ArmorDetectorModel::INT16_HEAD_L:
       return &kVariants[2];
-    case ArmorDetectorModel::INT8_HEAD:
+    case ArmorDetectorModel::INT16_FAST_L:
       return &kVariants[3];
-    case ArmorDetectorModel::INT8_GRID:
+    case ArmorDetectorModel::INT8_HEAD:
       return &kVariants[4];
-    case ArmorDetectorModel::INT16_HEAD:
+    case ArmorDetectorModel::INT8_GRID:
       return &kVariants[5];
+    case ArmorDetectorModel::INT16_HEAD:
+      return &kVariants[6];
+    case ArmorDetectorModel::INT16_FAST:
+      return &kVariants[7];
     default:
       return nullptr;
   }

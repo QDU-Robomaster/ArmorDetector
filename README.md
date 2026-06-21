@@ -25,23 +25,38 @@
 
 ## 模型
 
-Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的 `6` 个枚举值是：
+Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的 `8` 个枚举值是：
 
 - `ArmorDetectorModel::INT8_HEAD_L`
 - `ArmorDetectorModel::INT8_GRID_L`
 - `ArmorDetectorModel::INT16_HEAD_L`
+- `ArmorDetectorModel::INT16_FAST_L`
 - `ArmorDetectorModel::INT8_HEAD`
 - `ArmorDetectorModel::INT8_GRID`
 - `ArmorDetectorModel::INT16_HEAD`
+- `ArmorDetectorModel::INT16_FAST`
 
 这些变体都已经映射到模块目录下的稳定工件文件名：
 
 - `model/skd_int8_head_l.hef`
 - `model/skd_int8_grid_l.hef`
 - `model/szu_int16_head_l.hef`
+- `model/int16_fast_l.hef`
 - `model/skd_int8_head.hef`
 - `model/skd_int8_grid.hef`
 - `model/szu_int16_head.hef`
+- `model/int16_fast.hef`
+
+当前 clean-tree 已按最新已验证候选更新过以下稳定工件：
+
+- `model/skd_int8_head.hef`
+  - refreshed to the measured-better bare `26T` public `1ctx` candidate
+- `model/skd_int8_grid_l.hef`
+  - refreshed to `int8_grid_l_force2limits.hef`
+- `model/szu_int16_head_l.hef`
+  - refreshed to promoted `int16_quality_l_perfmax_autores.hef`
+- `model/szu_int16_head.hef`
+  - refreshed to measured bare `int16_quality_h8_perfmax_autores.hef`
 
 `infer/` 目录负责不同模型的适配：
 
@@ -54,7 +69,8 @@ Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的
 
 - `INT8_HEAD*`：`int8` 六输出 host-tail 语义
 - `INT8_GRID*`：`int8` 单输出 `21x6720` 语义
-- `INT16_HEAD*`：`int16` 三头 `conv47/54/60` 语义
+- `INT16_HEAD*`：`int16` 三头 `conv47/54/60` 语义，当前对外 canonical 名为 `int16-quality*`
+- `INT16_FAST*`：`int16` 三头 `conv47/54/60` 语义，same-HAR fast 路线
 
 ## 结果内容
 
@@ -81,7 +97,7 @@ Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的
 - `network.max_detections`：NMS 后最多保留候选数量。
 - `network.enable_quad_check`：是否检查四边形面积和基本形状。
 - `network.min_quad_area_px`：四边形最小面积，单位 `px^2`。
-- `network.model`：固定 detector 模型枚举；当前接受 `ArmorDetectorModel::INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT8_HEAD / INT8_GRID / INT16_HEAD`。
+- `network.model`：固定 detector 模型枚举；当前接受 `ArmorDetectorModel::INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT16_FAST_L / INT8_HEAD / INT8_GRID / INT16_HEAD / INT16_FAST`。
 
 如果配置层需要写显式表达式，直接用：
 

@@ -264,7 +264,12 @@ ArmorDetector<CameraInfoV>::FinalizeDetections(
 
   const ArmorColor target_color = CurrentTargetColor();
   std::vector<int> indices = SelectDetectionsAfterOpenCvNms(detections);
-  SuppressNearDuplicateDetections(detections, indices);
+  const bool is_int8_head = cfg_.network.model == ArmorDetectorModel::INT8_HEAD ||
+                            cfg_.network.model == ArmorDetectorModel::INT8_HEAD_L;
+  if (!is_int8_head)
+  {
+    SuppressNearDuplicateDetections(detections, indices);
+  }
   counters_.overlap_kept_count = static_cast<uint32_t>(indices.size());
 
   std::vector<CandidateArmor> armors;
@@ -286,12 +291,15 @@ ArmorDetector<CameraInfoV>::FinalizeDetections(
     }
     ++counters_.semantic_kept_count;
 
-    ApplyNumberTypePrior(armor);
-    if (!ValidateArmorType(armor))
+    if (!is_int8_head)
     {
-      ++counters_.discarded_count;
-      ++counters_.type_discard_count;
-      continue;
+      ApplyNumberTypePrior(armor);
+      if (!ValidateArmorType(armor))
+      {
+        ++counters_.discarded_count;
+        ++counters_.type_discard_count;
+        continue;
+      }
     }
 
     armors.emplace_back(std::move(armor));
@@ -420,23 +428,56 @@ ArmorDetector<CameraInfoV>::DecodeModelDetection(
       {
         return output.At(row, field);
       },
-      output.OutputWidth());
+      output.OutputWidth(), row);
 }
+
+namespace
+{
+
+inline std::tuple<float, float, int> Int8GridCellForRow(int row)
+{
+  const int stride8_cols = detail::model_input_width / 8;
+  const int stride8_count = stride8_cols * (detail::model_input_height / 8);
+  const int stride16_cols = detail::model_input_width / 16;
+  const int stride16_count = stride16_cols * (detail::model_input_height / 16);
+  if (row < stride8_count)
+  {
+    return {static_cast<float>((row % stride8_cols) * 8),
+            static_cast<float>((row / stride8_cols) * 8),
+            8};
+  }
+  row -= stride8_count;
+  if (row < stride16_count)
+  {
+    return {static_cast<float>((row % stride16_cols) * 16),
+            static_cast<float>((row / stride16_cols) * 16),
+            16};
+  }
+  row -= stride16_count;
+  const int stride32_cols = detail::model_input_width / 32;
+  return {static_cast<float>((row % stride32_cols) * 32),
+          static_cast<float>((row / stride32_cols) * 32),
+          32};
+}
+
+}  // namespace
 
 template <CameraTypes::CameraInfo CameraInfoV>
 template <typename FieldReader>
 std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
 ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
     const detail::NetworkInputMapping& mapping, FieldReader&& read,
-    int field_count) const
+    int field_count, int row) const
 {
   const auto& adapter = infer::resolve_model_infer_adapter(cfg_.network.model);
   const float objectness_logit = read(8);
-  const double logit_threshold =
-      cfg_.network.logit_threshold > 0.0
-          ? cfg_.network.logit_threshold
-          : detail::default_logit_threshold;
-  if (objectness_logit < static_cast<float>(logit_threshold))
+  const float objectness_value = infer::decode_confidence(adapter, objectness_logit);
+  const double prefilter_threshold =
+      adapter.confidence_is_logit
+          ? cfg_.network.min_confidence
+          : (cfg_.network.logit_threshold > 0.0 ? cfg_.network.logit_threshold
+                                                : detail::default_logit_threshold);
+  if (objectness_value < static_cast<float>(prefilter_threshold))
   {
     return std::nullopt;
   }
@@ -458,10 +499,21 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
           std::min(adapter.raw_class_end, field_count));
 
   std::array<cv::Point2f, 4> declared_points{};
+  float grid_offset_x = 0.0F;
+  float grid_offset_y = 0.0F;
+  float point_stride = 1.0F;
+  if (cfg_.network.model == ArmorDetectorModel::INT8_GRID ||
+      cfg_.network.model == ArmorDetectorModel::INT8_GRID_L)
+  {
+    const auto [cx, cy, stride] = Int8GridCellForRow(row);
+    grid_offset_x = cx;
+    grid_offset_y = cy;
+    point_stride = static_cast<float>(stride * 2);
+  }
   for (int point_index = 0; point_index < 4; ++point_index)
   {
-    const float x = read(point_index * 2);
-    const float y = read(point_index * 2 + 1);
+    const float x = read(point_index * 2) * point_stride + grid_offset_x;
+    const float y = read(point_index * 2 + 1) * point_stride + grid_offset_y;
     declared_points[static_cast<std::size_t>(point_index)] =
         mapping.MapToSource(x, y);
   }
@@ -480,8 +532,7 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
   }
   detection.color = adapter.decode_color(raw_color_id);
   detection.number = adapter.decode_number(raw_class_id);
-  detection.confidence =
-      infer::decode_confidence(adapter, objectness_logit);
+  detection.confidence = objectness_value;
   detection.points = points;
   const double bbox_expand =
       cfg_.network.bbox_expand >= 0.0 ? cfg_.network.bbox_expand

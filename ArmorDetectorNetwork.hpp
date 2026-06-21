@@ -73,6 +73,11 @@ class ArmorDetectorNetwork
     Reset();
     model_line_ = model.line;
     hailort_hef_path_ = NormalizeOptionalPath(model.hailort_hef_path);
+    if (const char* env_hef = std::getenv("XR_ARMOR_HEF_PATH"); env_hef != nullptr &&
+                                                            env_hef[0] != '\0')
+    {
+      hailort_hef_path_ = env_hef;
+    }
     backend_kind_ = DetectorBackendKind::HAILORT;
     return ConfigureHailoRt(hailort_hef_path_.c_str());
   }
@@ -400,7 +405,9 @@ class ArmorDetectorNetwork
               HAILO_DEFAULT_VSTREAM_QUEUE_SIZE, "");
       auto output_params_expected =
           hailo_network_group_->make_output_vstream_params(
-              false, HAILO_FORMAT_TYPE_AUTO,
+              false,
+              model_line_ == infer::ModelLine::INT8 ? HAILO_FORMAT_TYPE_FLOAT32
+                                                    : HAILO_FORMAT_TYPE_AUTO,
               HAILO_DEFAULT_VSTREAM_TIMEOUT_MS,
               HAILO_DEFAULT_VSTREAM_QUEUE_SIZE, "");
       if (!input_params_expected.has_value() || !output_params_expected.has_value())
@@ -774,7 +781,7 @@ class ArmorDetectorNetwork
                                     const std::vector<hailo_quant_info_t>& quant_infos,
                                     cv::Mat& output) const
   {
-    output.create(detail::int8_output_width, detail::int8_candidate_count, CV_32F);
+    output.create(detail::int8_candidate_count, detail::int8_output_width, CV_32F);
     if (storage.size() < static_cast<size_t>(detail::int8_output_width *
                                              detail::int8_candidate_count))
     {
@@ -785,33 +792,25 @@ class ArmorDetectorNetwork
       return false;
     }
 
-    Eigen::Map<detail::RowMajorArrayXXf> output_matrix(
-        output.ptr<float>(), detail::int8_output_width,
-        detail::int8_candidate_count);
-    Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>
-        source_matrix(storage.data(), detail::int8_output_width,
-                      detail::int8_candidate_count);
-
-    if (quant_infos.empty())
+    for (int candidate = 0; candidate < detail::int8_candidate_count; ++candidate)
     {
-      output_matrix = source_matrix.template cast<float>().array();
-      return true;
-    }
-
-    if (quant_infos.size() == 1U)
-    {
-      const auto& qi = quant_infos.front();
-      output_matrix =
-          (source_matrix.template cast<float>().array() - qi.qp_zp) * qi.qp_scale;
-      return true;
-    }
-
-    for (int row = 0; row < detail::int8_output_width; ++row)
-    {
-      const auto& qi = quant_infos[static_cast<std::size_t>(row) % quant_infos.size()];
-      output_matrix.row(row) =
-          (source_matrix.row(row).template cast<float>().array() - qi.qp_zp) *
-          qi.qp_scale;
+      float* dst = output.ptr<float>(candidate);
+      for (int field = 0; field < detail::int8_output_width; ++field)
+      {
+        const std::size_t index =
+            static_cast<std::size_t>(field) *
+                static_cast<std::size_t>(detail::int8_candidate_count) +
+            static_cast<std::size_t>(candidate);
+        if (quant_infos.empty())
+        {
+          dst[field] = static_cast<float>(storage[index]);
+          continue;
+        }
+        const auto& qi = quant_infos.size() == 1U
+                             ? quant_infos.front()
+                             : quant_infos[static_cast<std::size_t>(field) % quant_infos.size()];
+        dst[field] = DequantizeValue(storage[index], qi);
+      }
     }
     return true;
   }
@@ -892,11 +891,10 @@ class ArmorDetectorNetwork
               LoadQuantizedBlock<16>(concat16_tensor->data() + cell16, q16, 0);
           dst.setZero();
           dst.segment(0, 8) = conv8_block;
-          dst(8) = concat16_block(0);
-          dst(17) = concat16_block(1);
-          dst(18) = concat16_block(2);
-          dst.segment(9, 8) = concat16_block.segment(4, 8);
-          dst.segment(19, 2) = concat16_block.segment(12, 2);
+          const auto activation1 =
+              1.0F / (1.0F + (-concat16_block.segment(4, 12)).exp());
+          dst(8) = activation1.segment(0, 4).maxCoeff();
+          dst.segment(9, 12) = activation1;
 
           Eigen::Array<float, 1, 8> grid_offset;
           grid_offset << static_cast<float>(x * stride), static_cast<float>(y * stride),

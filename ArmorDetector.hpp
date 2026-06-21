@@ -93,6 +93,9 @@ depends:
 #ifndef ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH
 #define ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH ""
 #endif
+#ifndef ARMOR_DETECTOR_INT16_FAST_L_HEF_PATH
+#define ARMOR_DETECTOR_INT16_FAST_L_HEF_PATH ""
+#endif
 #ifndef ARMOR_DETECTOR_INT8_HEAD_HEF_PATH
 #define ARMOR_DETECTOR_INT8_HEAD_HEF_PATH ""
 #endif
@@ -101,6 +104,9 @@ depends:
 #endif
 #ifndef ARMOR_DETECTOR_INT16_HEAD_HEF_PATH
 #define ARMOR_DETECTOR_INT16_HEAD_HEF_PATH ""
+#endif
+#ifndef ARMOR_DETECTOR_INT16_FAST_HEF_PATH
+#define ARMOR_DETECTOR_INT16_FAST_HEF_PATH ""
 #endif
 /**
  * @brief 装甲板检测应用模块。
@@ -139,7 +145,7 @@ class ArmorDetector : public LibXR::Application
    */
   struct NetworkParams
   {
-    /// 固定模型枚举：INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT8_HEAD / INT8_GRID / INT16_HEAD。
+    /// 固定模型枚举：INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT16_FAST_L / INT8_HEAD / INT8_GRID / INT16_HEAD / INT16_FAST。
     ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
     double min_confidence{0.1};          ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};        ///< 是否检查网络四点凸性和面积。
@@ -370,7 +376,7 @@ class ArmorDetector : public LibXR::Application
   template <typename FieldReader>
   std::optional<NetworkDetection> DecodeModelDetectionFromFields(
       const detail::NetworkInputMapping& mapping, FieldReader&& read,
-      int field_count) const;
+      int field_count, int row) const;
 
   /**
    * @brief 将网络检测单元转换为内部候选并计算基础几何指标。
