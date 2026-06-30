@@ -78,8 +78,14 @@ class ArmorDetectorNetwork
     {
       hailort_hef_path_ = env_hef;
     }
+#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     backend_kind_ = DetectorBackendKind::HAILORT;
     return ConfigureHailoRt(hailort_hef_path_.c_str());
+#else
+    input_shape_ = {model_input_width, model_input_height};
+    XR_LOG_ERROR("ArmorDetector was built without HailoRT support");
+    return false;
+#endif
   }
 
   /**
@@ -129,7 +135,11 @@ class ArmorDetectorNetwork
       XR_LOG_ERROR("ArmorDetector backend is not configured");
       return false;
     }
+#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     return InferHailoRt(input, output);
+#else
+    return false;
+#endif
   }
 
   template <typename DetectionT, typename DetectionBuilder>
@@ -277,9 +287,9 @@ class ArmorDetectorNetwork
     input_shape_ = {};
     hailort_hef_path_.clear();
     last_hailo_timing_ = {};
+#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     hailo_infer_call_count_ = 0;
 
-#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     hailo_output_infos_.clear();
     hailo_output_buffers_.clear();
     hailo_output_bytes_.clear();

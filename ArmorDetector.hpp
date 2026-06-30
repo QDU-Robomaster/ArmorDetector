@@ -496,7 +496,7 @@ class ArmorDetector : public LibXR::Application
    * @brief 包含检测结果和源同步帧指针的结果 Topic。
    */
   LibXR::Topic armors_frame_topic_ =
-      LibXR::Topic("armors_frame", sizeof(DetectionMessage), &armor_domain_);
+      LibXR::Topic::CreateTopic<DetectionMessage>("armors_frame", &armor_domain_);
 
   /**
    * @brief 裁判系统主题域。

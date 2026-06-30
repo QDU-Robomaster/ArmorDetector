@@ -9,17 +9,21 @@ add_library(${_DEPS_TARGET} INTERFACE)
 find_package(OpenCV REQUIRED)
 find_package(HailoRT QUIET CONFIG)
 
-if(NOT HailoRT_FOUND)
-  message(FATAL_ERROR "ArmorDetector requires HailoRT")
-endif()
-
 remove_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 target_compile_definitions(xr PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
 
 target_link_libraries(${_DEPS_TARGET} INTERFACE
   ${OpenCV_LIBS}
-  HailoRT::libhailort
 )
+
+if(HailoRT_FOUND)
+  target_link_libraries(${_DEPS_TARGET} INTERFACE HailoRT::libhailort)
+  target_compile_definitions(${_DEPS_TARGET} INTERFACE
+    ARMOR_DETECTOR_HAVE_HAILORT=1
+  )
+else()
+  message(STATUS "HailoRT not found; ArmorDetector will build without the HailoRT runtime backend")
+endif()
 
 set(ARMOR_DETECTOR_INT8_HEAD_L_HEF_FILE
   "${CMAKE_CURRENT_LIST_DIR}/model/skd_int8_head_l.hef"
@@ -55,7 +59,6 @@ target_compile_definitions(${_DEPS_TARGET} INTERFACE
   ARMOR_DETECTOR_INT8_GRID_HEF_PATH="${ARMOR_DETECTOR_INT8_GRID_HEF_FILE}"
   ARMOR_DETECTOR_INT16_HEAD_HEF_PATH="${ARMOR_DETECTOR_INT16_HEAD_HEF_FILE}"
   ARMOR_DETECTOR_INT16_FAST_HEF_PATH="${ARMOR_DETECTOR_INT16_FAST_HEF_FILE}"
-  ARMOR_DETECTOR_HAVE_HAILORT=1
 )
 
 set_property(GLOBAL APPEND PROPERTY XR_MODULE_DEPS ${_DEPS_TARGET})
