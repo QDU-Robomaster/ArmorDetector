@@ -21,9 +21,16 @@ template <CameraTypes::CameraInfo CameraInfoV>
 ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
                                           LibXR::ApplicationManager& app,
                                           Config cfg,
-                                          Sync& sync)
+                                          Sync* sync)
     : sync_(sync)
 {
+  ASSERT(sync_ != nullptr);
+
+  armor_domain_.emplace("armor_detector");
+  armors_frame_topic_ = LibXR::Topic::CreateTopic<DetectionMessage>(
+      "armors_frame", &*armor_domain_);
+  referee_domain_.emplace("host");
+
   SetConfig(cfg);
 
   if (cfg_.referee_auto_detect_color)
@@ -39,9 +46,10 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
       topic_name = "robot_game_ref";
     }
 
-    referee_domain_ = LibXR::Topic::Domain(domain_name);
+    referee_domain_.emplace(domain_name);
     referee_topic_ =
-        LibXR::Topic(LibXR::Topic::WaitTopic(topic_name, UINT32_MAX, &referee_domain_));
+        LibXR::Topic(LibXR::Topic::WaitTopic(topic_name, UINT32_MAX,
+                                            &*referee_domain_));
     referee_callback_ = LibXR::Topic::Callback::Create(
         [](bool, ArmorDetector* self, LibXR::RawData& data)
         {
@@ -55,6 +63,15 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
   sync_frame_thread_.detach();
 
   app.Register(*this);
+}
+
+template <CameraTypes::CameraInfo CameraInfoV>
+ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer& hw,
+                                          LibXR::ApplicationManager& app,
+                                          Config cfg,
+                                          Sync& sync)
+    : ArmorDetector(hw, app, std::move(cfg), &sync)
+{
 }
 
 /**
@@ -442,19 +459,21 @@ void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
 template <CameraTypes::CameraInfo CameraInfoV>
 void ArmorDetector<CameraInfoV>::SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self)
 {
-  XR_LOG_INFO("ArmorDetector sync worker starting: image=%s imu=%s",
-              self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
+  Sync& sync = *self->sync_;
 
-  typename Sync::Subscriber subscriber(self->sync_);
+  XR_LOG_INFO("ArmorDetector sync worker starting: image=%s imu=%s",
+              sync.ImageTopicName(), sync.ImuTopicName());
+
+  typename Sync::Subscriber subscriber(sync);
   if (!subscriber.Valid())
   {
     XR_LOG_ERROR("ArmorDetector failed to attach sync image topic: %s",
-                 self->sync_.ImageTopicName());
+                 sync.ImageTopicName());
     return;
   }
 
   XR_LOG_PASS("ArmorDetector attached sync stream: image=%s imu=%s",
-              self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
+              sync.ImageTopicName(), sync.ImuTopicName());
 
   SyncedFrame synced_frame;
   while (true)

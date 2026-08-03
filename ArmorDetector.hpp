@@ -29,7 +29,7 @@ constructor_args:
       web_port: 8080
       web_stream_name: "armor_detector"
       max_fps: 30.0
-  sync: '@camera_frame_sync'
+  sync: '@nullptr'
 template_args:
   - Info:
       width: 1280
@@ -65,6 +65,7 @@ depends:
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -195,8 +196,11 @@ class ArmorDetector : public LibXR::Application
    * @param cfg detector 配置。
    * @param sync 图像/IMU 同步帧来源。
    */
-  ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg,
-                Sync& sync);
+  ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
+                Config cfg, Sync* sync);
+
+  ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
+                Config cfg, Sync& sync);
 
   /**
    * @brief 更新 detector 配置并重新加载对应模型。
@@ -470,7 +474,7 @@ class ArmorDetector : public LibXR::Application
 
  private:
   Config cfg_{};                         ///< 当前 detector 配置。
-  Sync& sync_;                           ///< 同步帧来源引用。
+  Sync* sync_{nullptr};                  ///< 必需的同步帧来源；构造时为空会触发 ASSERT。
   VisionPreview preview_{};              ///< 可选实时预览。
   ArmorDetectorPnPSolver<CameraInfoV> pnp_solver_{};  ///< 装甲板 PnP 求解器。
   uint64_t latest_timestamp_us_{0};      ///< 最近处理图像的传感器时间戳，单位 us。
@@ -490,18 +494,17 @@ class ArmorDetector : public LibXR::Application
   /**
    * @brief detector Topic domain，只发布 armors_frame。
    */
-  LibXR::Topic::Domain armor_domain_ = LibXR::Topic::Domain("armor_detector");
+  std::optional<LibXR::Topic::Domain> armor_domain_{};
 
   /**
    * @brief 包含检测结果和源同步帧指针的结果 Topic。
    */
-  LibXR::Topic armors_frame_topic_ =
-      LibXR::Topic::CreateTopic<DetectionMessage>("armors_frame", &armor_domain_);
+  LibXR::Topic armors_frame_topic_ = LibXR::Topic();
 
   /**
    * @brief 裁判系统主题域。
    */
-  LibXR::Topic::Domain referee_domain_ = LibXR::Topic::Domain("host");
+  std::optional<LibXR::Topic::Domain> referee_domain_{};
 
   /**
    * @brief 裁判系统摘要包主题。
