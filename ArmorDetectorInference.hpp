@@ -11,13 +11,13 @@
  * 该函数负责网络输入构建、HailoRT 推理和输出解码。
  * 语义过滤和尺寸类型判定在 DecodeOutput() 内完成。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param raw_img 输入 BGR 图像。
  * @return 本帧有效装甲板候选。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
-ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
+template <CameraTypes::FrameLayout FrameLayoutV>
+std::vector<typename ArmorDetector<FrameLayoutV>::CandidateArmor>
+ArmorDetector<FrameLayoutV>::Detect(const cv::Mat& raw_img)
 {
   counters_.decoded_count = 0U;
   counters_.overlap_kept_count = 0U;
@@ -39,7 +39,8 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
   const cv::Mat input = BuildNetworkInput(raw_img, input_mapping);
   const auto preprocess_end = std::chrono::steady_clock::now();
   last_preprocess_latency_ms_ =
-      std::chrono::duration<double, std::milli>(preprocess_end - preprocess_begin).count();
+      std::chrono::duration<double, std::milli>(preprocess_end - preprocess_begin)
+          .count();
   if (input.empty())
   {
     ++counters_.discarded_count;
@@ -66,12 +67,13 @@ ArmorDetector<CameraInfoV>::Detect(const cv::Mat& raw_img)
   auto armors = DecodeOutput(raw_img, input_mapping, output);
   const auto postprocess_end = std::chrono::steady_clock::now();
   last_postprocess_latency_ms_ =
-      std::chrono::duration<double, std::milli>(postprocess_end - postprocess_begin).count();
+      std::chrono::duration<double, std::milli>(postprocess_end - postprocess_begin)
+          .count();
   return armors;
 }
 
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::MaybeDumpModelOutput(const cv::Mat& output)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::MaybeDumpModelOutput(const cv::Mat& output)
 {
   const char* path = std::getenv("ARMOR_DETECTOR_DUMP_OUTPUT_F32");
   if (path == nullptr || path[0] == '\0')
@@ -87,8 +89,7 @@ void ArmorDetector<CameraInfoV>::MaybeDumpModelOutput(const cv::Mat& output)
   if (frame_env != nullptr && frame_env[0] != '\0')
   {
     const unsigned long requested_frame = std::strtoul(frame_env, nullptr, 10);
-    const unsigned long current_frame =
-        static_cast<unsigned long>(frame_index_ + 1U);
+    const unsigned long current_frame = static_cast<unsigned long>(frame_index_ + 1U);
     if (requested_frame != current_frame)
     {
       return;
@@ -133,13 +134,13 @@ void ArmorDetector<CameraInfoV>::MaybeDumpModelOutput(const cv::Mat& output)
  *
  * mapping 描述当前网络张量坐标如何还原到原始图像坐标。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param bgr_img 原始 BGR 图像。
  * @param mapping 输出的坐标还原映射。
  * @return 网络张量 RGB8 图像；输入空图时返回空 Mat。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
+template <CameraTypes::FrameLayout FrameLayoutV>
+cv::Mat ArmorDetector<FrameLayoutV>::BuildNetworkInput(
     const cv::Mat& bgr_img, detail::NetworkInputMapping& mapping) const
 {
   if (bgr_img.empty())
@@ -148,10 +149,8 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
   }
 
   const auto input_shape = network_.InputShape();
-  mapping.x_scale =
-      static_cast<double>(bgr_img.cols) / std::max(1, input_shape.width);
-  mapping.y_scale =
-      static_cast<double>(bgr_img.rows) / std::max(1, input_shape.height);
+  mapping.x_scale = static_cast<double>(bgr_img.cols) / std::max(1, input_shape.width);
+  mapping.y_scale = static_cast<double>(bgr_img.rows) / std::max(1, input_shape.height);
 
   cv::Mat input;
   cv::resize(bgr_img, input, cv::Size(input_shape.width, input_shape.height));
@@ -166,27 +165,28 @@ cv::Mat ArmorDetector<CameraInfoV>::BuildNetworkInput(
  * 输出先解码为 NetworkDetection，再执行交叠抑制、颜色/编号/置信度过滤和
  * 尺寸类型一致性检查。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param mapping 网络输入到原始图像的坐标映射。
  * @param output 网络输出矩阵。
  * @return 通过所有 detector 后处理门限的候选列表。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
-ArmorDetector<CameraInfoV>::DecodeOutput(
-    const cv::Mat& raw_img, const detail::NetworkInputMapping& mapping,
-    const cv::Mat& output)
+template <CameraTypes::FrameLayout FrameLayoutV>
+std::vector<typename ArmorDetector<FrameLayoutV>::CandidateArmor>
+ArmorDetector<FrameLayoutV>::DecodeOutput(const cv::Mat& raw_img,
+                                          const detail::NetworkInputMapping& mapping,
+                                          const cv::Mat& output)
 {
   std::vector<NetworkDetection> detections;
 
   const auto& adapter = infer::resolve_model_infer_adapter(cfg_.network.model);
-  const detail::ModelOutputView output_view(
-      output, adapter.candidate_count, adapter.output_width);
+  const detail::ModelOutputView output_view(output, adapter.candidate_count,
+                                            adapter.output_width);
   if (!output_view.Valid())
   {
     const auto input_shape = network_.InputShape();
     XR_LOG_ERROR(
-        "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=%dx%d input=%dx%d",
+        "ArmorDetector output shape invalid: rows=%d cols=%d type=%d expected=%dx%d "
+        "input=%dx%d",
         output.rows, output.cols, output.type(), adapter.candidate_count,
         adapter.output_width, input_shape.width, input_shape.height);
     ++counters_.discarded_count;
@@ -202,9 +202,8 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   {
     const float objectness_logit = output_view.At(row, 8);
     max_objectness_logit = std::max(max_objectness_logit, objectness_logit);
-    const int raw_color_id =
-        detail::ArgMaxOutputRange(output_view, row, adapter.raw_color_begin,
-                                  adapter.raw_color_end);
+    const int raw_color_id = detail::ArgMaxOutputRange(
+        output_view, row, adapter.raw_color_begin, adapter.raw_color_end);
     if (raw_color_id >= 0 && raw_color_id < static_cast<int>(raw_color_hist.size()))
     {
       ++raw_color_hist[static_cast<std::size_t>(raw_color_id)];
@@ -228,8 +227,7 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
     ++quad_keep_count;
 
     counters_.max_objectness =
-        std::max(counters_.max_objectness,
-                 static_cast<double>(detection->confidence));
+        std::max(counters_.max_objectness, static_cast<double>(detection->confidence));
     detections.emplace_back(*detection);
   }
   counters_.decoded_count = static_cast<uint32_t>(detections.size());
@@ -237,11 +235,11 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   if (detections.empty())
   {
     XR_LOG_INFO(
-        "ArmorDetector zero-decode diag max_obj_logit=%.3f max_obj_sigmoid=%.3f raw_color_hist=[%d,%d,%d,%d] pass_obj=%u pass_color=%u pass_quad=%u",
-        max_objectness_logit, detail::Sigmoid(max_objectness_logit),
-        raw_color_hist[0], raw_color_hist[1], raw_color_hist[2],
-        raw_color_hist[3], objectness_pass_count, raw_color_keep_count,
-        quad_keep_count);
+        "ArmorDetector zero-decode diag max_obj_logit=%.3f max_obj_sigmoid=%.3f "
+        "raw_color_hist=[%d,%d,%d,%d] pass_obj=%u pass_color=%u pass_quad=%u",
+        max_objectness_logit, detail::Sigmoid(max_objectness_logit), raw_color_hist[0],
+        raw_color_hist[1], raw_color_hist[2], raw_color_hist[3], objectness_pass_count,
+        raw_color_keep_count, quad_keep_count);
   }
 
   if (detections.empty())
@@ -252,9 +250,9 @@ ArmorDetector<CameraInfoV>::DecodeOutput(
   return FinalizeDetections(raw_img, std::move(detections));
 }
 
-template <CameraTypes::CameraInfo CameraInfoV>
-std::vector<typename ArmorDetector<CameraInfoV>::CandidateArmor>
-ArmorDetector<CameraInfoV>::FinalizeDetections(
+template <CameraTypes::FrameLayout FrameLayoutV>
+std::vector<typename ArmorDetector<FrameLayoutV>::CandidateArmor>
+ArmorDetector<FrameLayoutV>::FinalizeDetections(
     const cv::Mat& raw_img, std::vector<NetworkDetection>&& detections)
 {
   if (detections.empty())
@@ -281,8 +279,7 @@ ArmorDetector<CameraInfoV>::FinalizeDetections(
 
     const bool color_mismatch =
         (target_color != ArmorColor::UNKNOWN) && (armor.color != target_color);
-    if (color_mismatch ||
-        !ArmorNumberIsKnown(armor.number) ||
+    if (color_mismatch || !ArmorNumberIsKnown(armor.number) ||
         armor.confidence < static_cast<float>(cfg_.network.min_confidence))
     {
       ++counters_.discarded_count;
@@ -308,10 +305,9 @@ ArmorDetector<CameraInfoV>::FinalizeDetections(
   return armors;
 }
 
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::SuppressNearDuplicateDetections(
-    const std::vector<NetworkDetection>& detections,
-    std::vector<int>& indices) const
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::SuppressNearDuplicateDetections(
+    const std::vector<NetworkDetection>& detections, std::vector<int>& indices) const
 {
   if (indices.size() <= 1U)
   {
@@ -329,26 +325,22 @@ void ArmorDetector<CameraInfoV>::SuppressNearDuplicateDetections(
     bool duplicate = false;
     for (const int kept_index : kept)
     {
-      const auto& reference =
-          detections[static_cast<std::size_t>(kept_index)];
-      if (candidate.color != reference.color ||
-          candidate.number != reference.number)
+      const auto& reference = detections[static_cast<std::size_t>(kept_index)];
+      if (candidate.color != reference.color || candidate.number != reference.number)
       {
         continue;
       }
 
       const cv::Point2f candidate_center = detail::quad_center(candidate.points);
       const cv::Point2f reference_center = detail::quad_center(reference.points);
-      const float center_distance =
-          cv::norm(candidate_center - reference_center);
+      const float center_distance = cv::norm(candidate_center - reference_center);
       if (center_distance <= kDuplicateCenterDistancePx)
       {
         duplicate = true;
         break;
       }
 
-      const float iou =
-          detail::rect_iou(candidate.box, reference.box);
+      const float iou = detail::rect_iou(candidate.box, reference.box);
       if (iou >= kDuplicateIouThreshold)
       {
         duplicate = true;
@@ -371,8 +363,8 @@ void ArmorDetector<CameraInfoV>::SuppressNearDuplicateDetections(
  * score threshold 使用 network.min_confidence，IoU threshold 使用
  * network.nms_threshold，然后按 confidence 降序截断 max_detections。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-std::vector<int> ArmorDetector<CameraInfoV>::SelectDetectionsAfterOpenCvNms(
+template <CameraTypes::FrameLayout FrameLayoutV>
+std::vector<int> ArmorDetector<FrameLayoutV>::SelectDetectionsAfterOpenCvNms(
     const std::vector<NetworkDetection>& detections) const
 {
   if (detections.empty())
@@ -391,19 +383,17 @@ std::vector<int> ArmorDetector<CameraInfoV>::SelectDetectionsAfterOpenCvNms(
   }
 
   std::vector<int> indices;
-  cv::dnn::NMSBoxes(
-      boxes, scores, static_cast<float>(cfg_.network.min_confidence),
-      static_cast<float>(cfg_.network.nms_threshold), indices);
+  cv::dnn::NMSBoxes(boxes, scores, static_cast<float>(cfg_.network.min_confidence),
+                    static_cast<float>(cfg_.network.nms_threshold), indices);
   std::sort(indices.begin(), indices.end(),
             [&detections](int lhs, int rhs)
             {
               return detections[static_cast<std::size_t>(lhs)].confidence >
                      detections[static_cast<std::size_t>(rhs)].confidence;
             });
-  const int max_detections =
-      cfg_.network.max_detections > 0
-          ? cfg_.network.max_detections
-          : detail::default_max_detections;
+  const int max_detections = cfg_.network.max_detections > 0
+                                 ? cfg_.network.max_detections
+                                 : detail::default_max_detections;
   if (static_cast<int>(indices.size()) > max_detections)
   {
     indices.resize(static_cast<std::size_t>(max_detections));
@@ -416,18 +406,14 @@ std::vector<int> ArmorDetector<CameraInfoV>::SelectDetectionsAfterOpenCvNms(
  *
  * 该 decoder 按当前模型适配器解释 objectness、颜色、编号和角点顺序。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
-ArmorDetector<CameraInfoV>::DecodeModelDetection(
-    const detail::NetworkInputMapping& mapping,
-    const detail::ModelOutputView& output, int row) const
+template <CameraTypes::FrameLayout FrameLayoutV>
+std::optional<typename ArmorDetector<FrameLayoutV>::NetworkDetection>
+ArmorDetector<FrameLayoutV>::DecodeModelDetection(
+    const detail::NetworkInputMapping& mapping, const detail::ModelOutputView& output,
+    int row) const
 {
   return DecodeModelDetectionFromFields(
-      mapping,
-      [&output, row](int field)
-      {
-        return output.At(row, field);
-      },
+      mapping, [&output, row](int field) { return output.At(row, field); },
       output.OutputWidth(), row);
 }
 
@@ -443,31 +429,28 @@ inline std::tuple<float, float, int> Int8GridCellForRow(int row)
   if (row < stride8_count)
   {
     return {static_cast<float>((row % stride8_cols) * 8),
-            static_cast<float>((row / stride8_cols) * 8),
-            8};
+            static_cast<float>((row / stride8_cols) * 8), 8};
   }
   row -= stride8_count;
   if (row < stride16_count)
   {
     return {static_cast<float>((row % stride16_cols) * 16),
-            static_cast<float>((row / stride16_cols) * 16),
-            16};
+            static_cast<float>((row / stride16_cols) * 16), 16};
   }
   row -= stride16_count;
   const int stride32_cols = detail::model_input_width / 32;
   return {static_cast<float>((row % stride32_cols) * 32),
-          static_cast<float>((row / stride32_cols) * 32),
-          32};
+          static_cast<float>((row / stride32_cols) * 32), 32};
 }
 
 }  // namespace
 
-template <CameraTypes::CameraInfo CameraInfoV>
+template <CameraTypes::FrameLayout FrameLayoutV>
 template <typename FieldReader>
-std::optional<typename ArmorDetector<CameraInfoV>::NetworkDetection>
-ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
-    const detail::NetworkInputMapping& mapping, FieldReader&& read,
-    int field_count, int row) const
+std::optional<typename ArmorDetector<FrameLayoutV>::NetworkDetection>
+ArmorDetector<FrameLayoutV>::DecodeModelDetectionFromFields(
+    const detail::NetworkInputMapping& mapping, FieldReader&& read, int field_count,
+    int row) const
 {
   const auto& adapter = infer::resolve_model_infer_adapter(cfg_.network.model);
   const float objectness_logit = read(8);
@@ -483,20 +466,11 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
   }
 
   const int raw_color_id =
-      detail::ArgMaxFieldRange(
-          [&read](int field)
-          {
-            return read(field);
-          },
-          adapter.raw_color_begin, adapter.raw_color_end);
-  const int raw_class_id =
-      detail::ArgMaxFieldRange(
-          [&read](int field)
-          {
-            return read(field);
-          },
-          adapter.raw_class_begin,
-          std::min(adapter.raw_class_end, field_count));
+      detail::ArgMaxFieldRange([&read](int field) { return read(field); },
+                               adapter.raw_color_begin, adapter.raw_color_end);
+  const int raw_class_id = detail::ArgMaxFieldRange(
+      [&read](int field) { return read(field); }, adapter.raw_class_begin,
+      std::min(adapter.raw_class_end, field_count));
 
   std::array<cv::Point2f, 4> declared_points{};
   float grid_offset_x = 0.0F;
@@ -514,8 +488,7 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
   {
     const float x = read(point_index * 2) * point_stride + grid_offset_x;
     const float y = read(point_index * 2 + 1) * point_stride + grid_offset_y;
-    declared_points[static_cast<std::size_t>(point_index)] =
-        mapping.MapToSource(x, y);
+    declared_points[static_cast<std::size_t>(point_index)] = mapping.MapToSource(x, y);
   }
 
   const auto points = infer::canonicalize_points(adapter, declared_points);
@@ -534,9 +507,9 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
   detection.number = adapter.decode_number(raw_class_id);
   detection.confidence = objectness_value;
   detection.points = points;
-  const double bbox_expand =
-      cfg_.network.bbox_expand >= 0.0 ? cfg_.network.bbox_expand
-                                      : detail::default_bbox_expand;
+  const double bbox_expand = cfg_.network.bbox_expand >= 0.0
+                                 ? cfg_.network.bbox_expand
+                                 : detail::default_bbox_expand;
   detection.box =
       detail::expanded_bounding_rect_from_points(detection.points, bbox_expand);
   return detection;
@@ -547,14 +520,13 @@ ArmorDetector<CameraInfoV>::DecodeModelDetectionFromFields(
  *
  * 候选会立即计算中心和尺寸比例等几何派生量。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param detection 网络检测单元。
  * @return 初始化完成的内部候选。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-typename ArmorDetector<CameraInfoV>::CandidateArmor
-ArmorDetector<CameraInfoV>::BuildCandidateArmor(
-    const NetworkDetection& detection) const
+template <CameraTypes::FrameLayout FrameLayoutV>
+typename ArmorDetector<FrameLayoutV>::CandidateArmor
+ArmorDetector<FrameLayoutV>::BuildCandidateArmor(const NetworkDetection& detection) const
 {
   CandidateArmor armor;
   armor.color = detection.color;
