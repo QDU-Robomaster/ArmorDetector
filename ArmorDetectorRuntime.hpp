@@ -12,25 +12,17 @@
  *
  * detector 当前不直接访问 HardwareContainer；图像和 IMU 由 CameraFrameSync 输入。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param app 应用管理器，用于注册本模块。
  * @param cfg detector 初始配置。
  * @param sync 同步帧来源。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
-                                          LibXR::ApplicationManager& app,
-                                          Config cfg,
-                                          Sync* sync)
-    : sync_(sync)
+template <CameraTypes::FrameLayout FrameLayoutV>
+ArmorDetector<FrameLayoutV>::ArmorDetector(LibXR::HardwareContainer&,
+                                           LibXR::ApplicationManager& app, Config cfg,
+                                           Sync& sync)
+    : sync_(sync), pnp_solver_(sync.Calibration())
 {
-  ASSERT(sync_ != nullptr);
-
-  armor_domain_.emplace("armor_detector");
-  armors_frame_topic_ = LibXR::Topic::CreateTopic<DetectionMessage>(
-      "armors_frame", &*armor_domain_);
-  referee_domain_.emplace("host");
-
   SetConfig(cfg);
 
   if (cfg_.referee_auto_detect_color)
@@ -46,16 +38,12 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
       topic_name = "robot_game_ref";
     }
 
-    referee_domain_.emplace(domain_name);
+    referee_domain_ = LibXR::Topic::Domain(domain_name);
     referee_topic_ =
-        LibXR::Topic(LibXR::Topic::WaitTopic(topic_name, UINT32_MAX,
-                                            &*referee_domain_));
+        LibXR::Topic(LibXR::Topic::WaitTopic(topic_name, UINT32_MAX, &referee_domain_));
     referee_callback_ = LibXR::Topic::Callback::Create(
-        [](bool, ArmorDetector* self, LibXR::RawData& data)
-        {
-          self->OnRefereeRobotGame(data);
-        },
-        this);
+        [](bool, ArmorDetector* self, const LibXR::ConstRawData& data)
+        { self->OnRefereeRobotGame(data); }, this);
     referee_topic_.RegisterCallback(referee_callback_);
   }
 
@@ -65,23 +53,14 @@ ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer&,
   app.Register(*this);
 }
 
-template <CameraTypes::CameraInfo CameraInfoV>
-ArmorDetector<CameraInfoV>::ArmorDetector(LibXR::HardwareContainer& hw,
-                                          LibXR::ApplicationManager& app,
-                                          Config cfg,
-                                          Sync& sync)
-    : ArmorDetector(hw, app, std::move(cfg), &sync)
-{
-}
-
 /**
  * @brief 更新配置并重新加载模型。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param cfg 新 detector 配置。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::SetConfig(const Config& cfg)
 {
   cfg_ = cfg;
   counters_ = {};
@@ -91,23 +70,19 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
   const auto* resolved_model = infer::resolve_detector_model(cfg_.network.model);
   if (resolved_model == nullptr)
   {
-    XR_LOG_ERROR(
-        "ArmorDetector unknown model enum=%u, fallback to default %s",
-        static_cast<unsigned>(cfg_.network.model),
-        infer::detector_model_name(infer::default_detector_model));
+    XR_LOG_ERROR("ArmorDetector unknown model enum=%u, fallback to default %s",
+                 static_cast<unsigned>(cfg_.network.model),
+                 infer::detector_model_name(infer::default_detector_model));
   }
-  const auto& resolved =
-      infer::resolve_detector_model_or_default(cfg_.network.model);
+  const auto& resolved = infer::resolve_detector_model_or_default(cfg_.network.model);
 
+  XR_LOG_INFO("ArmorDetector model=%s line=%s hef_path=%s", resolved.canonical_name,
+              infer::model_line_name(resolved.line), resolved.hailort_hef_path);
   XR_LOG_INFO(
-      "ArmorDetector model=%s line=%s hef_path=%s",
-      resolved.canonical_name,
-      infer::model_line_name(resolved.line), resolved.hailort_hef_path);
-  XR_LOG_INFO(
-      "ArmorDetector decode logit=%.3f confidence=%.3f nms=%.3f bbox_expand=%.3f max_det=%d",
+      "ArmorDetector decode logit=%.3f confidence=%.3f nms=%.3f bbox_expand=%.3f "
+      "max_det=%d",
       cfg_.network.logit_threshold, cfg_.network.min_confidence,
-      cfg_.network.nms_threshold, cfg_.network.bbox_expand,
-      cfg_.network.max_detections);
+      cfg_.network.nms_threshold, cfg_.network.bbox_expand, cfg_.network.max_detections);
   network_.Configure(resolved);
 }
 
@@ -116,11 +91,11 @@ void ArmorDetector<CameraInfoV>::SetConfig(const Config& cfg)
  *
  * 当前只依赖 RobotGameRefereePack 第一个字段 RobotStatus 的首字节 robot_id。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param data 裁判系统摘要包原始数据。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::OnRefereeRobotGame(const LibXR::RawData& data)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::OnRefereeRobotGame(const LibXR::ConstRawData& data)
 {
   if (data.addr_ == nullptr || data.size_ < sizeof(uint8_t))
   {
@@ -143,11 +118,11 @@ void ArmorDetector<CameraInfoV>::OnRefereeRobotGame(const LibXR::RawData& data)
  * 自动颜色启用且已收到有效裁判系统 robot_id 时使用动态敌方颜色，否则使用
  * cfg.detect_color。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @return 当前用于语义过滤的目标颜色。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-ArmorColor ArmorDetector<CameraInfoV>::CurrentTargetColor() const
+template <CameraTypes::FrameLayout FrameLayoutV>
+ArmorColor ArmorDetector<FrameLayoutV>::CurrentTargetColor() const
 {
   if (cfg_.referee_auto_detect_color)
   {
@@ -167,12 +142,12 @@ ArmorColor ArmorDetector<CameraInfoV>::CurrentTargetColor() const
  * RoboMaster ID 1~99 视为红方，本机红方时目标为蓝色；ID 101~199 视为蓝方，
  * 本机蓝方时目标为红色。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param robot_id 本机机器人 ID。
  * @return 0=红，1=蓝，-1=不确定。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-int ArmorDetector<CameraInfoV>::TargetColorFromRobotId(uint8_t robot_id)
+template <CameraTypes::FrameLayout FrameLayoutV>
+int ArmorDetector<FrameLayoutV>::TargetColorFromRobotId(uint8_t robot_id)
 {
   if (robot_id >= 1U && robot_id < 100U)
   {
@@ -191,13 +166,13 @@ int ArmorDetector<CameraInfoV>::TargetColorFromRobotId(uint8_t robot_id)
  * 该函数保持 armors_frame 中的 source_frame 指针与当前检测结果同步，随后执行
  * detector 主链路、填充内部指标，并发布 armors_frame。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param img_msg BGR 图像。
  * @param synced_frame 原始同步帧。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
-                                              const SyncedFrame& synced_frame)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::ProcessImage(const cv::Mat& img_msg,
+                                               const SyncedFrame& synced_frame)
 {
   if (img_msg.empty())
   {
@@ -213,12 +188,14 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
 
   const uint64_t image_timestamp_us = image_frame->timestamp_us;
   armors_frame_packet_.source_frame.image_timestamp_us = image_timestamp_us;
+  armors_frame_packet_.source_frame.geometry = image_frame->geometry;
   armors_frame_packet_.source_frame.image_frame = image_frame;
   armors_frame_packet_.source_frame.imu = &synced_frame.imu;
   armors_frame_packet_.detections = &armors_packet_;
   latest_timestamp_us_ = image_timestamp_us;
 
   const auto start_time = std::chrono::steady_clock::now();
+  AutoAimReplayBenchmark::RecordDetectorStart(image_timestamp_us);
   const cv::Mat& bgr_img = img_msg;
   const uint64_t next_frame_index = frame_index_ + 1U;
   const bool trace_frame = (next_frame_index <= 5U) || (next_frame_index % 30U == 0U);
@@ -234,9 +211,11 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   const auto detector_finish = std::chrono::steady_clock::now();
   if (trace_frame)
   {
-    XR_LOG_INFO("ArmorDetector trace frame=%llu step=detect_end armors=%zu decoded=%u semantic_kept=%u",
-                static_cast<unsigned long long>(next_frame_index), armors.size(),
-                counters_.decoded_count, counters_.semantic_kept_count);
+    XR_LOG_INFO(
+        "ArmorDetector trace frame=%llu step=detect_end armors=%zu decoded=%u "
+        "semantic_kept=%u",
+        static_cast<unsigned long long>(next_frame_index), armors.size(),
+        counters_.decoded_count, counters_.semantic_kept_count);
   }
 
   if (trace_frame)
@@ -244,12 +223,11 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
     XR_LOG_INFO("ArmorDetector trace frame=%llu step=fill_begin",
                 static_cast<unsigned long long>(next_frame_index));
   }
-  FillResultMessage(armors, bgr_img);
+  FillResultMessage(armors, bgr_img, image_frame->geometry);
   armors_packet_.results.erase(
-      std::remove_if(
-          armors_packet_.results.begin(), armors_packet_.results.end(),
-          [](const ArmorDetectorResult& armor)
-          { return armor.number == ArmorNumber::OUTPOST; }),
+      std::remove_if(armors_packet_.results.begin(), armors_packet_.results.end(),
+                     [](const ArmorDetectorResult& armor)
+                     { return armor.number == ArmorNumber::OUTPOST; }),
       armors_packet_.results.end());
   const auto result_finish = std::chrono::steady_clock::now();
   if (trace_frame)
@@ -282,6 +260,33 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   metrics_msg_.result_latency_ms =
       std::chrono::duration<double, std::milli>(result_finish - detector_finish).count();
 
+  AutoAimReplayBenchmark::RecordDetector(
+      image_timestamp_us, metrics_msg_.preprocess_latency_ms,
+      metrics_msg_.infer_latency_ms, metrics_msg_.postprocess_latency_ms,
+      metrics_msg_.hailo_infer_latency_ms, metrics_msg_.hailo_tail_latency_ms,
+      metrics_msg_.detector_latency_ms, metrics_msg_.result_latency_ms,
+      metrics_msg_.armor_count, metrics_msg_.pnp_success_count);
+  for (const auto& armor : armors_packet_.results)
+  {
+    AutoAimReplayBenchmark::DetectionRecord detection{};
+    detection.color = static_cast<int>(armor.color);
+    detection.type = static_cast<int>(armor.type);
+    detection.number = static_cast<int>(armor.number);
+    detection.confidence = static_cast<double>(armor.confidence);
+    detection.pnp_valid = armor.pnp_valid;
+    detection.pnp_error_px = armor.pnp_reprojection_error_px;
+    for (std::size_t index = 0; index < armor.points.size(); ++index)
+    {
+      detection.corners[index * 2U] = armor.points[index].x;
+      detection.corners[index * 2U + 1U] = armor.points[index].y;
+    }
+    for (std::size_t index = 0; index < detection.translation.size(); ++index)
+    {
+      detection.translation[index] = armor.pose.translation[index];
+    }
+    AutoAimReplayBenchmark::RecordDetection(image_timestamp_us, std::move(detection));
+  }
+
   DetectionMessage armors_frame_msg = &armors_frame_packet_;
   const LibXR::MicrosecondTimestamp publish_timestamp(image_timestamp_us);
   if (trace_frame)
@@ -300,7 +305,7 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
     XR_LOG_INFO("ArmorDetector trace frame=%llu step=preview_begin",
                 static_cast<unsigned long long>(frame_index_));
   }
-  SubmitPreview(bgr_img);
+  SubmitPreview(bgr_img, armors);
   if (trace_frame)
   {
     XR_LOG_INFO("ArmorDetector trace frame=%llu step=preview_end",
@@ -310,23 +315,23 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
   if ((frame_index_ % detail::metrics_log_period) == 0U)
   {
     XR_LOG_INFO(
-        "ArmorDetector frame=%llu armors=%u decoded=%u overlap_kept=%u semantic_kept=%u pnp=%u",
+        "ArmorDetector frame=%llu armors=%u decoded=%u overlap_kept=%u semantic_kept=%u "
+        "pnp=%u",
         static_cast<unsigned long long>(metrics_msg_.frame_index),
         metrics_msg_.armor_count, metrics_msg_.decoded_count,
         metrics_msg_.overlap_kept_count, metrics_msg_.semantic_kept_count,
         metrics_msg_.pnp_success_count);
     XR_LOG_INFO(
-        "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f detector_ms=%.3f result_ms=%.3f",
-        metrics_msg_.semantic_discard_count,
-        metrics_msg_.type_discard_count, metrics_msg_.discarded_count,
-        metrics_msg_.max_objectness,
+        "ArmorDetector semantic_discard=%u type_discard=%u discarded=%u max_obj=%.3f "
+        "detector_ms=%.3f result_ms=%.3f",
+        metrics_msg_.semantic_discard_count, metrics_msg_.type_discard_count,
+        metrics_msg_.discarded_count, metrics_msg_.max_objectness,
         metrics_msg_.detector_latency_ms, metrics_msg_.result_latency_ms);
     XR_LOG_INFO(
-        "ArmorDetector split_ms preprocess=%.3f infer_call=%.3f postprocess=%.3f hailo_infer=%.3f hailo_tail=%.3f",
-        metrics_msg_.preprocess_latency_ms,
-        metrics_msg_.infer_latency_ms,
-        metrics_msg_.postprocess_latency_ms,
-        metrics_msg_.hailo_infer_latency_ms,
+        "ArmorDetector split_ms preprocess=%.3f infer_call=%.3f postprocess=%.3f "
+        "hailo_infer=%.3f hailo_tail=%.3f",
+        metrics_msg_.preprocess_latency_ms, metrics_msg_.infer_latency_ms,
+        metrics_msg_.postprocess_latency_ms, metrics_msg_.hailo_infer_latency_ms,
         metrics_msg_.hailo_tail_latency_ms);
   }
 }
@@ -334,14 +339,13 @@ void ArmorDetector<CameraInfoV>::ProcessImage(const cv::Mat& img_msg,
 /**
  * @brief 将同步帧中的原始图像数据包装成 OpenCV Mat 并转换为 BGR。
  *
- * CameraInfoV 的 encoding/width/height/step 必须与图像帧内存布局一致，否则
- * 后续 detector 的像素解释和 PnP 内参都会失配。
+ * 编码来自固定 `frame_layout`，有效宽高和行跨度来自逐帧 `geometry`。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param synced_frame CameraFrameSync 输出的同步帧。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_frame)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::ProcessSyncedFrame(const SyncedFrame& synced_frame)
 {
   const auto* image_frame = synced_frame.GetImageFrame();
   if (image_frame == nullptr)
@@ -350,19 +354,19 @@ void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_fr
     return;
   }
 
-  const int cv_type = detail::CvTypeFromEncoding(camera_info.encoding);
+  const auto& geometry = image_frame->geometry;
+  const int cv_type = detail::CvTypeFromEncoding(frame_layout.encoding);
   if (cv_type < 0)
   {
     XR_LOG_WARN("ArmorDetector sync frame encoding unsupported: %u",
-                static_cast<unsigned>(camera_info.encoding));
+                static_cast<unsigned>(frame_layout.encoding));
     return;
   }
 
-  cv::Mat img(static_cast<int>(camera_info.height), static_cast<int>(camera_info.width),
+  cv::Mat img(static_cast<int>(geometry.height), static_cast<int>(geometry.width),
               cv_type, const_cast<uint8_t*>(image_frame->data.data()),
-              static_cast<size_t>(camera_info.step));
-  const cv::Mat bgr_img =
-      detail::ConvertToBgrWithEncoding(img, camera_info.encoding);
+              static_cast<size_t>(geometry.step));
+  const cv::Mat bgr_img = detail::ConvertToBgrWithEncoding(img, frame_layout.encoding);
   if (bgr_img.empty())
   {
     return;
@@ -376,22 +380,23 @@ void ArmorDetector<CameraInfoV>::ProcessSyncedFrame(const SyncedFrame& synced_fr
  * Submit 会先深拷贝图像；回调捕获的是检测结果快照，避免预览线程读到下一帧复用的
  * armors_packet_ / metrics_msg_。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param bgr_img 当前 BGR 图像。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::SubmitPreview(const cv::Mat& bgr_img,
+                                                const std::vector<CandidateArmor>& armors)
 {
   if (!preview_.Running())
   {
     return;
   }
 
-  const ArmorDetectionsPacket detections = armors_packet_;
+  const std::vector<CandidateArmor> local_armors = armors;
   const FrameMetrics metrics = metrics_msg_;
   preview_.Submit(
       bgr_img,
-      [detections, metrics](cv::Mat& canvas)
+      [local_armors, metrics](cv::Mat& canvas)
       {
         const auto preview_color_for = [](ArmorColor color) -> cv::Scalar
         {
@@ -413,37 +418,32 @@ void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
                      : std::string("unknown");
         };
 
-        for (const auto& armor : detections.results)
+        for (const auto& armor : local_armors)
         {
           const cv::Scalar color = preview_color_for(armor.color);
           for (std::size_t i = 0; i < armor.points.size(); ++i)
           {
             cv::line(canvas, armor.points[i],
-                     armor.points[(i + 1U) % armor.points.size()], color, 2,
-                     cv::LINE_AA);
+                     armor.points[(i + 1U) % armor.points.size()], color, 2, cv::LINE_AA);
             cv::circle(canvas, armor.points[i], 3, color, -1, cv::LINE_AA);
           }
-          cv::circle(canvas, armor.center, 4, cv::Scalar(0, 255, 0), -1,
-                     cv::LINE_AA);
+          cv::circle(canvas, armor.center, 4, cv::Scalar(0, 255, 0), -1, cv::LINE_AA);
 
           const std::string label =
               number_name_for(armor.number) + " " +
-              std::to_string(static_cast<int>(armor.confidence * 100.0F)) +
-              "% pnp=" + (armor.pnp_valid ? "1" : "0");
-          const cv::Point text_origin(
-              std::max(0, static_cast<int>(armor.box.x)),
-              std::max(18, static_cast<int>(armor.box.y) - 6));
-          cv::putText(canvas, label, text_origin, cv::FONT_HERSHEY_SIMPLEX,
-                      0.55, color, 2, cv::LINE_AA);
+              std::to_string(static_cast<int>(armor.confidence * 100.0F)) + "%";
+          const cv::Point text_origin(std::max(0, static_cast<int>(armor.box.x)),
+                                      std::max(18, static_cast<int>(armor.box.y) - 6));
+          cv::putText(canvas, label, text_origin, cv::FONT_HERSHEY_SIMPLEX, 0.55, color,
+                      2, cv::LINE_AA);
         }
 
         const std::string header =
             "detector frame=" + std::to_string(metrics.frame_index) +
             " armors=" + std::to_string(metrics.armor_count) +
             " pnp=" + std::to_string(metrics.pnp_success_count);
-        cv::putText(canvas, header, cv::Point(12, 28),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(40, 240, 40),
-                    2, cv::LINE_AA);
+        cv::putText(canvas, header, cv::Point(12, 28), cv::FONT_HERSHEY_SIMPLEX, 0.75,
+                    cv::Scalar(40, 240, 40), 2, cv::LINE_AA);
       });
 }
 
@@ -453,27 +453,25 @@ void ArmorDetector<CameraInfoV>::SubmitPreview(const cv::Mat& bgr_img)
  * worker 持有 CameraFrameSync subscriber，持续等待同步帧；超时只继续等待，非
  * OK 错误会停止 worker 并打印错误。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param self detector 实例。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::SyncFrameThreadFun(ArmorDetector<CameraInfoV>* self)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::SyncFrameThreadFun(ArmorDetector<FrameLayoutV>* self)
 {
-  Sync& sync = *self->sync_;
-
   XR_LOG_INFO("ArmorDetector sync worker starting: image=%s imu=%s",
-              sync.ImageTopicName(), sync.ImuTopicName());
+              self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
 
-  typename Sync::Subscriber subscriber(sync);
+  typename Sync::Subscriber subscriber(self->sync_);
   if (!subscriber.Valid())
   {
     XR_LOG_ERROR("ArmorDetector failed to attach sync image topic: %s",
-                 sync.ImageTopicName());
+                 self->sync_.ImageTopicName());
     return;
   }
 
   XR_LOG_PASS("ArmorDetector attached sync stream: image=%s imu=%s",
-              sync.ImageTopicName(), sync.ImuTopicName());
+              self->sync_.ImageTopicName(), self->sync_.ImuTopicName());
 
   SyncedFrame synced_frame;
   while (true)

@@ -1,27 +1,27 @@
 # ArmorDetector
 
-`ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用 HailoRT 模型检测装甲板四角点，再根据相机内参求出装甲板在相机坐标系下的位姿。模块输出会保留当前同步帧引用，供 `ArmorTracker` 在同进程回调里立刻使用。
+`ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用 HailoRT 模型检测装甲板四角点，再根据原生传感器标定求出装甲板在相机坐标系下的位姿。模块输出会保留当前同步帧引用和逐帧几何，供 `ArmorTracker` 在同进程回调里立刻使用。
 
 ## 数据流
 
-1. 读取 `CameraFrameSync<Info>::SyncedFrame`。
+1. 读取 `CameraFrameSync<Layout>::SyncedFrame`。
 2. 将图像缩放到模型输入尺寸，并从 BGR 转成 RGB。
 3. 执行 HailoRT 推理，按当前模型适配器解码颜色、编号、置信度和四角点。
 4. 过滤低置信度、颜色不匹配、编号无效或几何异常的候选。
-5. 对有效候选执行 PnP，发布 `armor_detector/armors_frame`。
+5. 只在发布边界把四角点、中心和包围盒映射到原生传感器坐标，使用原生 K/D 执行 PnP，再发布 `armor_detector/armors_frame`。
 
 ## 输入输出
 
 输入：
 
-- `CameraFrameSync<Info>::SyncedFrame`
+- `CameraFrameSync<Layout>::SyncedFrame`
 - `host/robot_game_ref`，仅在 `referee_auto_detect_color: true` 时订阅
 
 输出：
 
 - `armor_detector/armors_frame`：本帧检测结果、图像时间戳、当前同步帧引用
 
-`armors_frame` 里的图像和 IMU 指针只在本次回调期间有效。消费模块必须在回调内完成读取，不能跨帧保存这些指针。
+`armors_frame` 里的图像和 IMU 指针只在本次回调期间有效。消费模块必须在回调内完成读取，不能跨帧保存这些指针。`FrameGeometry` 按值携带，可安全复制到后级队列。
 
 ## 模型
 
@@ -84,6 +84,8 @@ Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的
 
 相机坐标系沿用 OpenCV 约定：`x` 向右，`y` 向下，`z` 向前。这里的位姿只描述装甲板相对相机的位置和朝向，不包含 IMU 姿态融合。
 
+发布的包围盒、中心和四角点使用原生传感器像素坐标；`center_norm`、网络解码、NMS、阈值、结果 TSV 和 detector preview 仍使用当前帧坐标。这保证 resize、wide decimation 或 ROI 不改变检测语义。
+
 ## 配置
 
 - `detect_color`：`0` 只保留红色，`1` 只保留蓝色，其他值不过滤颜色。
@@ -119,6 +121,6 @@ network:
 
 ## 使用要求
 
-- `Info` 里的图像尺寸、`step`、编码、内参和畸变参数必须与实际相机输出一致。
+- 模板参数只描述图像缓冲区最大宽高、`step` 和固定编码。原生标定由 `CameraFrameSync::Calibration()` 在构造期复制，ROI、下采样和翻转由每帧 `FrameGeometry` 描述。
 - 当前主检测模型固定使用 `640x512` 输入；原始图像可以是其他尺寸。
 - 原始视频、同步数据和回放包由相机或采集模块保存，不在 `ArmorDetector` 中落盘。
