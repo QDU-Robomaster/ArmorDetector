@@ -72,6 +72,33 @@ ArmorDetector<FrameLayoutV>::Detect(const cv::Mat& raw_img)
   return armors;
 }
 
+/** Decode a caller-owned raw Hailo slot and run the existing detector postprocess. */
+template <CameraTypes::FrameLayout FrameLayoutV>
+std::vector<typename ArmorDetector<FrameLayoutV>::CandidateArmor>
+ArmorDetector<FrameLayoutV>::DecodePipelineOutput(
+    const cv::Mat& raw_img, const detail::NetworkInputMapping& input_mapping,
+    const detail::ArmorDetectorNetwork::RawOutputSlot& raw_output,
+    cv::Mat& decoded_output,
+    detail::ArmorDetectorNetwork::HailoDecodeTimingSnapshot& decode_timing,
+    double& postprocess_latency_ms)
+{
+  counters_ = {};
+  postprocess_latency_ms = 0.0;
+  if (!network_.DecodeRaw(raw_output, decoded_output, decode_timing))
+  {
+    return {};
+  }
+
+  MaybeDumpModelOutput(decoded_output);
+  const auto postprocess_begin = std::chrono::steady_clock::now();
+  auto armors = DecodeOutput(raw_img, input_mapping, decoded_output);
+  const auto postprocess_end = std::chrono::steady_clock::now();
+  postprocess_latency_ms =
+      std::chrono::duration<double, std::milli>(postprocess_end - postprocess_begin)
+          .count();
+  return armors;
+}
+
 template <CameraTypes::FrameLayout FrameLayoutV>
 void ArmorDetector<FrameLayoutV>::MaybeDumpModelOutput(const cv::Mat& output)
 {
@@ -143,20 +170,31 @@ template <CameraTypes::FrameLayout FrameLayoutV>
 cv::Mat ArmorDetector<FrameLayoutV>::BuildNetworkInput(
     const cv::Mat& bgr_img, detail::NetworkInputMapping& mapping) const
 {
-  if (bgr_img.empty())
+  cv::Mat rgb_input;
+  cv::Mat resized_bgr;
+  if (!BuildNetworkInput(bgr_img, mapping, resized_bgr, rgb_input))
   {
     return {};
+  }
+  return rgb_input;
+}
+
+template <CameraTypes::FrameLayout FrameLayoutV>
+bool ArmorDetector<FrameLayoutV>::BuildNetworkInput(
+    const cv::Mat& bgr_img, detail::NetworkInputMapping& mapping,
+    cv::Mat& resized_bgr, cv::Mat& rgb_input) const
+{
+  if (bgr_img.empty())
+  {
+    return false;
   }
 
   const auto input_shape = network_.InputShape();
   mapping.x_scale = static_cast<double>(bgr_img.cols) / std::max(1, input_shape.width);
   mapping.y_scale = static_cast<double>(bgr_img.rows) / std::max(1, input_shape.height);
-
-  cv::Mat input;
-  cv::resize(bgr_img, input, cv::Size(input_shape.width, input_shape.height));
-  cv::Mat rgb_input;
-  cv::cvtColor(input, rgb_input, cv::COLOR_BGR2RGB);
-  return rgb_input;
+  cv::resize(bgr_img, resized_bgr, cv::Size(input_shape.width, input_shape.height));
+  cv::cvtColor(resized_bgr, rgb_input, cv::COLOR_BGR2RGB);
+  return !rgb_input.empty() && rgb_input.isContinuous();
 }
 
 /**

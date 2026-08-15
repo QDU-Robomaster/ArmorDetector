@@ -71,11 +71,6 @@ constexpr double default_bbox_expand = 0.1;
 constexpr int default_max_detections = 128;
 
 /**
- * @brief 同步帧 worker 单次等待超时，单位 ms。
- */
-constexpr uint32_t sync_frame_wait_timeout_ms = 100;
-
-/**
  * @brief 周期性指标日志输出帧间隔。
  */
 constexpr uint32_t metrics_log_period = 30;

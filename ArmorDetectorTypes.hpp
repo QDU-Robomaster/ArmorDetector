@@ -170,59 +170,37 @@ struct ArmorDetectorResult
 using ArmorDetectorResults = std::vector<ArmorDetectorResult>;
 
 /**
- * @brief detector 发布的基础结果包。
- */
-struct ArmorDetectionsPacket
-{
-  uint64_t image_timestamp_us{0};  ///< 图像帧传感器时间戳，单位 us。
-  ArmorDetectorResults results{};  ///< 本帧检测出的所有有效装甲板。
-};
-
-/**
- * @brief detector 当前处理的原始同步帧引用。
+ * @brief detector 完成一帧处理后发布的进程内结果。
  *
- * 指针只在同进程 callback 链路里有效，不能跨帧缓存。
+ * `image` 持有 CameraBase 对象池槽位。普通 Topic 只在同步回调期间借用
+ * `const DetectedFrame*`；需要异步处理的订阅者必须在回调返回前复制本对象，
+ * 由其中的 `SharedFrame` 延长图像寿命。几何参数只从 `image` 指向的帧读取。
  *
  * @tparam FrameLayoutV 编译期帧布局。
  */
 template <CameraTypes::FrameLayout FrameLayoutV>
-struct ArmorDetectionsSourceFrame
+struct DetectedFrame
 {
-  /// 相机基础类型。
   using Base = CameraBase<FrameLayoutV>;
-  /// 同步图像帧类型。
   using ImageFrame = typename Base::ImageFrame;
-  /// 同步 IMU 样本类型。
+  using SharedFrame = typename Base::SharedFrame;
   using ImuStamped = typename Base::ImuStamped;
 
-  uint64_t image_timestamp_us{0};          ///< 图像帧传感器时间戳，单位 us。
-  CameraTypes::FrameGeometry geometry{};   ///< 当前帧到原生传感器坐标系的映射。
-  const ImageFrame* image_frame{nullptr};  ///< 原始图像帧，只在回调期间有效。
-  const ImuStamped* imu{nullptr};          ///< 与图像对齐的 IMU 样本，只在回调期间有效。
+  uint64_t sequence{};                 ///< CameraFrameSync 分配的帧序号。
+  SharedFrame image{};                 ///< 当前结果对应的共享图像所有权。
+  ImuStamped imu{};                    ///< 与图像对齐的 IMU 样本。
+  ArmorDetectorResults detections{};   ///< 本帧检测出的所有有效装甲板。
+
+  [[nodiscard]] const ImageFrame* GetImageFrame() const noexcept
+  {
+    return image.Get();
+  }
+
+  [[nodiscard]] bool Valid() const noexcept { return image.Valid(); }
 };
 
 /**
- * @brief 带原始同步帧引用的 detector 结果包。
- *
- * detector 在发布时把当前帧的结果和原始帧引用一起交给 tracker，
- * tracker 必须在回调里立刻消费，不能把这些指针跨帧保存。
- *
- * @tparam FrameLayoutV 编译期帧布局。
+ * @brief armors_frame 普通 Topic 在同步回调期间借用的 payload。
  */
 template <CameraTypes::FrameLayout FrameLayoutV>
-struct ArmorDetectionsFramePacket
-{
-  ArmorDetectionsSourceFrame<FrameLayoutV>
-      source_frame{};                          ///< 当前检测结果对应的原始帧。
-  ArmorDetectionsPacket* detections{nullptr};  ///< 当前检测结果包。
-};
-
-/**
- * @brief armors_frame 的 Topic 数据类型。
- *
- * tracker 必须在回调内同步消费指针。
- *
- * @tparam FrameLayoutV 编译期帧布局。
- */
-template <CameraTypes::FrameLayout FrameLayoutV>
-using ArmorDetectionsFrameMessage = ArmorDetectionsFramePacket<FrameLayoutV>*;
+using DetectedFrameMessage = const DetectedFrame<FrameLayoutV>*;
