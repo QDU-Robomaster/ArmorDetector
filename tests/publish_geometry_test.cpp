@@ -20,7 +20,7 @@ const cv::Rect frame_box{90, 40, 70, 80};
 CameraTypes::FrameGeometry MakeWideGeometry(uint16_t flags)
 {
   return {
-      1, 720, 540, 2160, 0, 0, 2, 2, flags, 0, 0.0F, 0.0F,
+      720, 540, 2160, 0, 0, 2, 2, flags, 0, 0.0F, 0.0F,
   };
 }
 

@@ -20,11 +20,10 @@
 template <CameraTypes::FrameLayout FrameLayoutV>
 void ArmorDetector<FrameLayoutV>::FillResultMessage(
     const std::vector<CandidateArmor>& armors, const cv::Mat& bgr_img,
-    const CameraTypes::FrameGeometry& geometry)
+    const CameraTypes::FrameGeometry& geometry, ArmorDetectorResults& results)
 {
-  armors_packet_.image_timestamp_us = latest_timestamp_us_;
-  armors_packet_.results.clear();
-  armors_packet_.results.reserve(armors.size());
+  results.clear();
+  results.reserve(armors.size());
 
   for (const auto& armor : armors)
   {
@@ -55,7 +54,7 @@ void ArmorDetector<FrameLayoutV>::FillResultMessage(
       ++counters_.pnp_success_count;
     }
 
-    armors_packet_.results.emplace_back(std::move(result));
+    results.emplace_back(std::move(result));
   }
 
   MaybeDumpResultsTsv(armors);
@@ -89,7 +88,7 @@ void ArmorDetector<FrameLayoutV>::MaybeDumpResultsTsv(
       return;
     }
     std::fprintf(file,
-                 "frame_index\timage_timestamp_us\tresult_"
+                 "frame_index\tframe_timestamp_us\tcamera_timestamp_us\tresult_"
                  "index\tcolor\tnumber\tconfidence\tcenter_x\tcenter_y\tp0_x\tp0_y\tp1_"
                  "x\tp1_y\tp2_x\tp2_y\tp3_x\tp3_y\n");
     std::fflush(file);
@@ -105,10 +104,12 @@ void ArmorDetector<FrameLayoutV>::MaybeDumpResultsTsv(
     const auto& armor = armors[index];
     std::fprintf(
         file,
-        "%llu\t%llu\t%zu\t%u\t%u\t%.9f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%"
+        "%llu\t%llu\t%llu\t%zu\t%u\t%u\t%.9f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%"
+        ".6f\t%"
         ".6f\t%.6f\n",
         static_cast<unsigned long long>(frame_index_ + 1U),
-        static_cast<unsigned long long>(latest_timestamp_us_), index,
+        static_cast<unsigned long long>(latest_frame_timestamp_us_),
+        static_cast<unsigned long long>(latest_camera_timestamp_us_), index,
         static_cast<unsigned>(armor.color), static_cast<unsigned>(armor.number),
         static_cast<double>(armor.confidence), static_cast<double>(armor.center.x),
         static_cast<double>(armor.center.y), static_cast<double>(armor.points[0].x),

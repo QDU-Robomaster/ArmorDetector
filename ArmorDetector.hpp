@@ -54,10 +54,12 @@ depends:
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/dnn.hpp>
@@ -65,10 +67,17 @@ depends:
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
+
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 #include "ArmorDetectorDetail.hpp"
 #include "ArmorDetectorNetwork.hpp"
+#include "ArmorDetectorPipeline.hpp"
 #include "ArmorDetectorPnPSolver.hpp"
 #include "ArmorDetectorPublishGeometry.hpp"
 #include "ArmorDetectorTypes.hpp"
@@ -107,9 +116,9 @@ depends:
 /**
  * @brief 装甲板检测应用模块。
  *
- * ArmorDetector 从 CameraFrameSync 读取已经对齐的图像/IMU 帧，执行网络角点检测、
- * 语义过滤、尺寸类型判断和 PnP 位姿求解，最后向 `armor_detector`
- * domain 发布带原始帧引用的检测结果。
+ * ArmorDetector 从 CameraFrameSync 读取已经对齐的图像/IMU
+ * 帧，执行网络角点检测、 语义过滤、尺寸类型判断和 PnP 位姿求解，最后向
+ * `armor_detector` domain 发布带原始帧引用的检测结果。
  *
  * @tparam FrameLayoutV 编译期图像缓冲区布局和像素编码。
  */
@@ -127,10 +136,14 @@ class ArmorDetector : public LibXR::Application
   using ImuStamped = typename Sync::ImuStamped;
   /// 图像/IMU 同步帧类型。
   using SyncedFrame = typename Sync::SyncedFrame;
-  /// 带源帧引用的结果包。
-  using DetectionPacket = ArmorDetectionsFramePacket<FrameLayoutV>;
-  /// 带源帧引用的 Topic 数据类型。
-  using DetectionMessage = ArmorDetectionsFrameMessage<FrameLayoutV>;
+  /// 同步帧普通 Topic 的借用 payload。
+  using SyncedFrameTopicPayload = typename Sync::SyncedFrameTopicPayload;
+  /// 共享图像所有权句柄。
+  using SharedFrame = typename Base::SharedFrame;
+  /// detector 阶段结果。
+  using DetectionPacket = DetectedFrame<FrameLayoutV>;
+  /// detector 普通 Topic 的借用 payload。
+  using DetectionMessage = DetectedFrameMessage<FrameLayoutV>;
   /**
    * @brief 当前模块实例绑定的编译期帧存储布局。
    */
@@ -141,8 +154,8 @@ class ArmorDetector : public LibXR::Application
    */
   struct NetworkParams
   {
-    /// 固定模型枚举：INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT16_FAST_L / INT8_HEAD
-    /// / INT8_GRID / INT16_HEAD / INT16_FAST。
+    /// 固定模型枚举：INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT16_FAST_L /
+    /// INT8_HEAD / INT8_GRID / INT16_HEAD / INT16_FAST。
     ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
     double min_confidence{0.1};     ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};   ///< 是否检查网络四点凸性和面积。
@@ -200,6 +213,9 @@ class ArmorDetector : public LibXR::Application
    * @param cfg 新配置。
    */
   void SetConfig(const Config& cfg);
+
+  /** Return true after every admitted frame has left the detector pipeline. */
+  [[nodiscard]] bool PipelineDrained() const noexcept;
 
   /**
    * @brief LibXR monitor hook，当前 detector 没有周期性 monitor 工作。
@@ -262,7 +278,8 @@ class ArmorDetector : public LibXR::Application
   struct FrameMetrics
   {
     uint64_t frame_index{0};             ///< detector 处理帧序号。
-    uint64_t image_timestamp_us{0};      ///< 图像帧传感器时间戳，单位 us。
+    uint64_t frame_timestamp_us{0};      ///< MCU FRAME_TRIGGER 陀螺仪时间，单位 us。
+    uint64_t camera_timestamp_us{0};     ///< 相机设备图像时间，单位 us。
     uint32_t decoded_count{0};           ///< decoder 保留候选数量。
     uint32_t overlap_kept_count{0};      ///< 交叠抑制后保留候选数量。
     uint32_t semantic_kept_count{0};     ///< 语义过滤后保留候选数量。
@@ -284,21 +301,53 @@ class ArmorDetector : public LibXR::Application
   /**
    * @brief 处理已经转换为 BGR Mat 的同步帧。
    * @param img_msg BGR 图像。
-   * @param synced_frame 原始同步帧，用于保留 source_frame 指针。
+   * @param synced_frame 原始同步帧，用于复制共享图像所有权和同步 IMU。
    */
-  void ProcessImage(const cv::Mat& img_msg, const SyncedFrame& synced_frame);
+  int64_t ProcessImage(
+      const cv::Mat& img_msg, SyncedFrame& synced_frame,
+      std::vector<CandidateArmor>&& armors, uint64_t frame_timestamp_us,
+      uint64_t camera_timestamp_us,
+      const detail::ArmorDetectorNetwork::HailoRawTimingSnapshot& infer_timing,
+      const detail::ArmorDetectorNetwork::HailoDecodeTimingSnapshot& decode_timing,
+      double preprocess_latency_ms, double postprocess_latency_ms);
 
-  /**
-   * @brief 将 CameraFrameSync 输出帧转换成 OpenCV BGR 图像并进入处理链路。
-   * @param frame 同步帧。
-   */
-  void ProcessSyncedFrame(const SyncedFrame& frame);
+  static void InferenceThreadFun(ArmorDetector<FrameLayoutV>* self);
 
-  /**
-   * @brief 后台同步帧 worker 入口。
-   * @param self detector 实例指针。
-   */
-  static void SyncFrameThreadFun(ArmorDetector<FrameLayoutV>* self);
+  static void OutputFusionThreadFun(ArmorDetector<FrameLayoutV>* self);
+
+  static void OnSyncedFrameStatic(bool, ArmorDetector<FrameLayoutV>* self,
+                                  SyncedFrameTopicPayload borrowed);
+
+  bool AdmitSyncedFrame(const SyncedFrame& synced_frame);
+
+  void RunInference(armor_detector_pipeline::WorkItem item);
+
+  void HandleInferenceCompletion(
+      armor_detector_pipeline::WorkItem item, bool ok,
+      detail::ArmorDetectorNetwork::HailoRawTimingSnapshot timing);
+
+  void DrainCompletedInferencesLocked();
+
+  void RunOutputFusion(armor_detector_pipeline::WorkItem item);
+
+  void RunPostprocess(armor_detector_pipeline::WorkItem item);
+
+  [[nodiscard]] bool HasFreePostSlotLocked() const;
+
+  std::optional<armor_detector_pipeline::WorkItem> AcquirePostSlotLocked();
+
+  bool HandoffInferToPostLocked(armor_detector_pipeline::WorkItem infer_item,
+                                armor_detector_pipeline::WorkItem post_item);
+
+  void ReleaseInferSlot(armor_detector_pipeline::WorkItem item);
+
+  void ReleaseInferSlotLocked(armor_detector_pipeline::WorkItem item);
+
+  int64_t ReleasePostSlot(armor_detector_pipeline::WorkItem item,
+                          uint64_t* no_free_count_at_release = nullptr);
+
+  int64_t ReleasePostSlotLocked(armor_detector_pipeline::WorkItem item,
+                                uint64_t* no_free_count_at_release = nullptr);
 
   /**
    * @brief 对单帧 BGR 图像执行网络检测和后处理。
@@ -306,6 +355,13 @@ class ArmorDetector : public LibXR::Application
    * @return 本帧有效装甲板候选。
    */
   std::vector<CandidateArmor> Detect(const cv::Mat& bgr_img);
+
+  std::vector<CandidateArmor> DecodePipelineOutput(
+      const cv::Mat& raw_img, const detail::NetworkInputMapping& input_mapping,
+      const detail::ArmorDetectorNetwork::RawOutputSlot& raw_output,
+      cv::Mat& decoded_output,
+      detail::ArmorDetectorNetwork::HailoDecodeTimingSnapshot& decode_timing,
+      double& postprocess_latency_ms);
 
   /**
    * @brief 构建网络输入图像并记录网络张量到源图像坐标的映射。
@@ -315,6 +371,9 @@ class ArmorDetector : public LibXR::Application
    */
   cv::Mat BuildNetworkInput(const cv::Mat& bgr_img,
                             detail::NetworkInputMapping& mapping) const;
+
+  bool BuildNetworkInput(const cv::Mat& bgr_img, detail::NetworkInputMapping& mapping,
+                         cv::Mat& resized_bgr, cv::Mat& rgb_input) const;
 
   /**
    * @brief 在环境变量启用时一次性导出 Infer() 后的矩阵输出。
@@ -426,7 +485,8 @@ class ArmorDetector : public LibXR::Application
   /**
    * @brief 裁判系统回调入口。
    *
-   * 只读取 RobotGameReferee 包前缀中的 robot_id 字节，根据阵营写入动态目标颜色标志。
+   * 只读取 RobotGameReferee 包前缀中的 robot_id
+   * 字节，根据阵营写入动态目标颜色标志。
    * @param data 裁判系统摘要包原始数据。
    */
   void OnRefereeRobotGame(const LibXR::ConstRawData& data);
@@ -451,7 +511,8 @@ class ArmorDetector : public LibXR::Application
    */
   void FillResultMessage(const std::vector<CandidateArmor>& armors,
                          const cv::Mat& bgr_img,
-                         const CameraTypes::FrameGeometry& geometry);
+                         const CameraTypes::FrameGeometry& geometry,
+                         ArmorDetectorResults& results);
 
   /**
    * @brief 在环境变量启用时导出最终 detector 结果 TSV。
@@ -466,23 +527,148 @@ class ArmorDetector : public LibXR::Application
   void SubmitPreview(const cv::Mat& bgr_img, const std::vector<CandidateArmor>& armors);
 
  private:
-  Config cfg_{};                             ///< 当前 detector 配置。
-  Sync& sync_;                               ///< 同步帧来源引用。
-  VisionPreview preview_{};                  ///< 可选实时预览。
-  ArmorDetectorPnPSolver pnp_solver_;        ///< 原生标定下的装甲板 PnP 求解器。
-  uint64_t latest_timestamp_us_{0};          ///< 最近处理图像的传感器时间戳，单位 us。
-  uint64_t frame_index_{0};                  ///< 已处理帧计数。
-  std::thread sync_frame_thread_{};          ///< 后台同步帧消费线程。
+  static constexpr std::size_t infer_inflight_slot_count = 2U;
+  static constexpr std::size_t infer_prepared_slot_count = 1U;
+  static constexpr std::size_t infer_slot_count =
+      infer_inflight_slot_count + infer_prepared_slot_count;
+  static constexpr std::size_t post_slot_count = 2U;
+  static constexpr uint32_t async_inflight_limit = infer_inflight_slot_count;
+
+  static int64_t PipelineNowNs() noexcept
+  {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
+
+  struct PipelineFrameContext
+  {
+    uint64_t frame_timestamp_us{0};
+    uint64_t camera_timestamp_us{0};
+    uint64_t admission_sequence{0};
+    bool admission_counted{false};
+    uint8_t infer_slot_id{0};
+    uint64_t infer_generation{0};
+    detail::NetworkInputMapping input_mapping{};
+    SyncedFrame synced_frame{};
+    detail::ArmorDetectorNetwork::HailoRawTimingSnapshot infer_timing{};
+    detail::ArmorDetectorNetwork::HailoDecodeTimingSnapshot decode_timing{};
+    double preprocess_latency_ms{0.0};
+    double postprocess_latency_ms{0.0};
+    int64_t slot_acquire_ns{0};
+    int64_t infer_enqueue_ns{0};
+    int64_t infer_start_ns{0};
+    int64_t infer_end_ns{0};
+    int64_t infer_worker_period_ns{0};
+    int64_t infer_worker_intercall_gap_ns{0};
+    int64_t infer_worker_dispatch_gap_ns{0};
+    int64_t output_enqueue_ns{0};
+    int64_t output_start_ns{0};
+    int64_t output_worker_period_ns{0};
+    int64_t output_end_ns{0};
+    int64_t post_enqueue_ns{0};
+    int64_t post_start_ns{0};
+    int64_t post_worker_period_ns{0};
+    int64_t post_end_ns{0};
+    uint32_t slots_busy_before_admission{0};
+    bool infer_backlog_after_call{false};
+    bool async_completed{false};
+    bool async_ok{false};
+    uint64_t async_admission_seq{0};
+    uint64_t async_request_id{0};
+    int64_t infer_submit_ns{0};
+    int64_t infer_complete_ns{0};
+    uint64_t async_completion_seq{0};
+    uint32_t inflight_before_submit{0};
+    uint32_t inflight_after_submit{0};
+    uint32_t inflight_at_complete{0};
+    uint32_t inflight_high_water_after_submit{0};
+    bool completion_reordered{false};
+    int64_t output_publish_ns{0};
+    uint64_t async_output_seq{0};
+  };
+
+  struct HailoBufferPair
+  {
+    detail::ArmorDetectorNetwork::RawOutputSlot raw_output{};
+    cv::Mat network_input{};
+  };
+
+  struct InferSlot
+  {
+    std::atomic<armor_detector_pipeline::InferSlotState> state{
+        armor_detector_pipeline::InferSlotState::FREE};
+    std::atomic<uint64_t> generation{0};
+    cv::Mat preprocess_scratch{};
+    std::size_t hailo_buffer_id{0U};
+    PipelineFrameContext context{};
+  };
+
+  struct PostSlot
+  {
+    std::atomic<armor_detector_pipeline::PostSlotState> state{
+        armor_detector_pipeline::PostSlotState::FREE};
+    std::atomic<uint64_t> generation{0};
+    std::size_t hailo_buffer_id{0U};
+    cv::Mat decoded_output{};
+    PipelineFrameContext context{};
+  };
+
+  Config cfg_{};                            ///< 当前 detector 配置。
+  Sync& sync_;                              ///< 同步帧来源引用。
+  VisionPreview preview_{};                 ///< 可选实时预览。
+  ArmorDetectorPnPSolver pnp_solver_;       ///< 原生标定下的装甲板 PnP 求解器。
+  uint64_t latest_frame_timestamp_us_{0};   ///< 最近处理帧的 MCU 触发时间，单位 us。
+  uint64_t latest_camera_timestamp_us_{0};  ///< 最近图像的相机设备时间，单位 us。
+  uint64_t frame_index_{0};                 ///< 已处理帧计数。
+  std::thread inference_thread_{};
+  std::thread output_fusion_thread_{};
   FrameCounters counters_{};                 ///< 当前帧内部计数器。
   detail::ArmorDetectorNetwork network_{};   ///< detector 推理后端。
   double last_preprocess_latency_ms_{0.0};   ///< Detect() 最近一帧前处理耗时。
   double last_infer_latency_ms_{0.0};        ///< Detect() 最近一帧 network_.Infer 耗时。
   double last_postprocess_latency_ms_{0.0};  ///< Detect() 最近一帧后处理耗时。
 
-  ArmorDetectionsPacket armors_packet_{};      ///< 复用的检测结果包。
-  DetectionPacket armors_frame_packet_{};      ///< 复用的带源帧引用结果包。
+  DetectionPacket detected_frame_{};           ///< 单 postprocess worker 复用的阶段结果。
   FrameMetrics metrics_msg_{};                 ///< 复用的内部运行指标。
   std::atomic<int> referee_target_color_{-1};  ///< 动态裁判系统目标颜色，-1 表示未设置。
+  std::array<InferSlot, infer_slot_count> infer_slots_{};
+  std::array<PostSlot, post_slot_count> post_slots_{};
+  // Hailo callbacks and bindings require these buffer object addresses to stay
+  // fixed.
+  std::array<HailoBufferPair, infer_slot_count + post_slot_count> hailo_buffer_pool_{};
+  armor_detector_pipeline::FixedSpscQueue<armor_detector_pipeline::WorkItem,
+                                          infer_slot_count>
+      inference_queue_{};
+  armor_detector_pipeline::FixedSpscQueue<armor_detector_pipeline::WorkItem,
+                                          post_slot_count>
+      output_queue_{};
+  armor_detector_pipeline::OrderedAsyncCompletions<infer_slot_count> async_completions_{};
+  mutable std::mutex pipeline_mutex_{};
+  std::condition_variable pipeline_cv_{};
+  std::atomic<uint64_t> next_admission_sequence_{0};
+  std::atomic<uint64_t> pipeline_admitted_count_{0};
+  std::atomic<uint64_t> pipeline_completed_count_{0};
+  std::atomic<uint64_t> pipeline_prepare_drop_count_{0};
+  std::atomic<uint64_t> pipeline_no_free_count_{0};
+  std::atomic<uint64_t> pipeline_infer_fail_count_{0};
+  std::atomic<uint64_t> pipeline_post_fail_count_{0};
+  std::atomic<bool> inference_worker_active_{false};
+  std::atomic<bool> output_worker_active_{false};
+  int64_t previous_infer_start_ns_{0};
+  std::atomic<int64_t> previous_infer_end_ns_{0};
+  int64_t previous_output_start_ns_{0};
+  int64_t previous_post_start_ns_{0};
+  uint64_t next_async_admission_seq_{0};
+  uint64_t next_async_request_id_{0};
+  uint64_t next_async_completion_seq_{0};
+  uint64_t next_async_output_seq_{0};
+  uint32_t async_inflight_{0};
+  uint32_t async_inflight_high_water_{0};
+  bool async_inference_enabled_{true};
+  std::atomic<bool> workers_started_{false};
+  LibXR::Topic synced_frame_topic_ = LibXR::Topic();
+  LibXR::Topic::Callback synced_frame_callback_{};
 
   /**
    * @brief detector Topic domain，只发布 armors_frame。
@@ -490,7 +676,7 @@ class ArmorDetector : public LibXR::Application
   LibXR::Topic::Domain armor_domain_ = LibXR::Topic::Domain("armor_detector");
 
   /**
-   * @brief 包含检测结果和源同步帧指针的结果 Topic。
+   * @brief 包含共享图像所有权和检测结果的进程内 Topic。
    */
   LibXR::Topic armors_frame_topic_ =
       LibXR::Topic::CreateTopic<DetectionMessage>("armors_frame", &armor_domain_);
