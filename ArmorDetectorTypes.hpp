@@ -7,10 +7,9 @@
 
 #include <array>
 #include <cstdint>
+#include <opencv2/core.hpp>
 #include <string_view>
 #include <vector>
-
-#include <opencv2/core.hpp>
 
 #include "CameraBase.hpp"
 #include "transform.hpp"
@@ -20,11 +19,11 @@
  */
 enum class ArmorColor : uint8_t
 {
-  RED = 0,        ///< 红色装甲板。
-  BLUE = 1,       ///< 蓝色装甲板。
-  EXTINGUISH = 2, ///< 熄灭或弱亮度装甲板。
-  PURPLE = 3,     ///< 紫色或红蓝混合观测。
-  UNKNOWN = 4,    ///< 颜色未知或不参与颜色过滤。
+  RED = 0,         ///< 红色装甲板。
+  BLUE = 1,        ///< 蓝色装甲板。
+  EXTINGUISH = 2,  ///< 熄灭或弱亮度装甲板。
+  PURPLE = 3,      ///< 紫色或红蓝混合观测。
+  UNKNOWN = 4,     ///< 颜色未知或不参与颜色过滤。
 };
 
 /**
@@ -32,9 +31,9 @@ enum class ArmorColor : uint8_t
  */
 enum class ArmorType : uint8_t
 {
-  SMALL = 0,  ///< 小装甲板。
-  LARGE = 1,  ///< 大装甲板。
-  INVALID = 2, ///< 无效或不可判定类型。
+  SMALL = 0,    ///< 小装甲板。
+  LARGE = 1,    ///< 大装甲板。
+  INVALID = 2,  ///< 无效或不可判定类型。
 };
 
 /**
@@ -42,17 +41,17 @@ enum class ArmorType : uint8_t
  */
 enum class ArmorNumber : uint8_t
 {
-  ONE = 0,              ///< 1 号目标。
-  TWO = 1,              ///< 2 号目标。
-  THREE = 2,            ///< 3 号目标。
-  FOUR = 3,             ///< 4 号目标。
-  FIVE = 4,             ///< 5 号目标。
-  OUTPOST = 5,          ///< 前哨站目标。
-  GUARD = 6,            ///< 哨兵目标。
-  BASE = 7,             ///< 基地目标。
-  NEGATIVE = 8,         ///< 负样本或未识别类别。
-  UNKNOWN = NEGATIVE,   ///< 未知类别，当前与负样本等价。
-  INVALID = NEGATIVE,   ///< 无效类别，当前与负样本等价。
+  ONE = 0,             ///< 1 号目标。
+  TWO = 1,             ///< 2 号目标。
+  THREE = 2,           ///< 3 号目标。
+  FOUR = 3,            ///< 4 号目标。
+  FIVE = 4,            ///< 5 号目标。
+  OUTPOST = 5,         ///< 前哨站目标。
+  GUARD = 6,           ///< 哨兵目标。
+  BASE = 7,            ///< 基地目标。
+  NEGATIVE = 8,        ///< 负样本或未识别类别。
+  UNKNOWN = NEGATIVE,  ///< 未知类别，当前与负样本等价。
+  INVALID = NEGATIVE,  ///< 无效类别，当前与负样本等价。
 };
 
 /**
@@ -60,12 +59,12 @@ enum class ArmorNumber : uint8_t
  */
 enum class ArmorPriority : uint8_t
 {
-  FIRST = 1,        ///< 最高优先级。
-  SECOND = 2,       ///< 第二优先级。
-  THIRD = 3,        ///< 第三优先级。
-  FOURTH = 4,       ///< 第四优先级。
-  FORTH = FOURTH,   ///< 拼写兼容别名。
-  FIFTH = 5,        ///< 最低优先级或默认兜底。
+  FIRST = 1,       ///< 最高优先级。
+  SECOND = 2,      ///< 第二优先级。
+  THIRD = 3,       ///< 第三优先级。
+  FOURTH = 4,      ///< 第四优先级。
+  FORTH = FOURTH,  ///< 拼写兼容别名。
+  FIFTH = 5,       ///< 最低优先级或默认兜底。
 };
 
 /**
@@ -77,15 +76,14 @@ inline constexpr std::array<std::string_view, 5> ARMOR_COLOR_NAMES = {
 /**
  * @brief ArmorType 到日志/调试字符串的稳定映射。
  */
-inline constexpr std::array<std::string_view, 3> ARMOR_TYPE_NAMES = {
-    "small", "large", "invalid"};
+inline constexpr std::array<std::string_view, 3> ARMOR_TYPE_NAMES = {"small", "large",
+                                                                     "invalid"};
 
 /**
  * @brief ArmorNumber 到日志/调试字符串的稳定映射。
  */
 inline constexpr std::array<std::string_view, 9> ARMOR_NUMBER_NAMES = {
-    "one",      "two",  "three",    "four", "five",
-    "outpost",  "guard", "base",    "negative"};
+    "one", "two", "three", "four", "five", "outpost", "guard", "base", "negative"};
 
 /**
  * @brief 判断编号先验是否对应大装甲板。
@@ -151,19 +149,19 @@ inline ArmorPriority GetArmorPriority(ArmorNumber number)
  */
 struct ArmorDetectorResult
 {
-  ArmorColor color{ArmorColor::UNKNOWN};       ///< 检测到的目标颜色。
-  ArmorNumber number{ArmorNumber::INVALID};    ///< 检测到的目标编号。
-  ArmorType type{ArmorType::INVALID};          ///< 推断出的装甲板尺寸类型。
-  ArmorPriority priority{ArmorPriority::FIFTH}; ///< 基于编号的默认目标优先级。
-  float confidence{0.0F};                       ///< 网络输出置信度。
-  cv::Rect box{};                              ///< 像素坐标下的包围盒。
-  std::array<cv::Point2f, 4> points{};         ///< 角点，顺序为左上、右上、右下、左下。
-  cv::Point2f center{};                        ///< 像素坐标下的四边形中心。
-  cv::Point2f center_norm{};                   ///< 图像宽高归一化后的中心。
-  double distance_to_image_center{0.0};        ///< 中心到相机主点的像素距离。
-  bool pnp_valid{false};                       ///< pose 是否由 PnP 成功求得。
-  double pnp_reprojection_error_px{0.0};       ///< PnP 平均重投影误差，单位 px。
-  LibXR::Transform<double> pose{};             ///< OpenCV 相机坐标系 C 下的装甲板位姿。
+  ArmorColor color{ArmorColor::UNKNOWN};         ///< 检测到的目标颜色。
+  ArmorNumber number{ArmorNumber::INVALID};      ///< 检测到的目标编号。
+  ArmorType type{ArmorType::INVALID};            ///< 推断出的装甲板尺寸类型。
+  ArmorPriority priority{ArmorPriority::FIFTH};  ///< 基于编号的默认目标优先级。
+  float confidence{0.0F};                        ///< 网络输出置信度。
+  cv::Rect box{};                                ///< 原生传感器像素坐标下的包围盒。
+  std::array<cv::Point2f, 4> points{};    ///< 原生角点，顺序为左上、右上、右下、左下。
+  cv::Point2f center{};                   ///< 原生传感器像素坐标下的中心。
+  cv::Point2f center_norm{};              ///< 当前帧宽高归一化后的中心。
+  double distance_to_image_center{0.0};   ///< 中心到相机主点的像素距离。
+  bool pnp_valid{false};                  ///< pose 是否由 PnP 成功求得。
+  double pnp_reprojection_error_px{0.0};  ///< PnP 平均重投影误差，单位 px。
+  LibXR::Transform<double> pose{};        ///< OpenCV 相机坐标系 C 下的装甲板位姿。
 };
 
 /**
@@ -172,57 +170,37 @@ struct ArmorDetectorResult
 using ArmorDetectorResults = std::vector<ArmorDetectorResult>;
 
 /**
- * @brief detector 发布的基础结果包。
- */
-struct ArmorDetectionsPacket
-{
-  uint64_t image_timestamp_us{0};     ///< 图像帧传感器时间戳，单位 us。
-  ArmorDetectorResults results{};     ///< 本帧检测出的所有有效装甲板。
-};
-
-/**
- * @brief detector 当前处理的原始同步帧引用。
+ * @brief detector 完成一帧处理后发布的进程内结果。
  *
- * 指针只在同进程 callback 链路里有效，不能跨帧缓存。
+ * `image` 持有 CameraBase 对象池槽位。普通 Topic 只在同步回调期间借用
+ * `const DetectedFrame*`；需要异步处理的订阅者必须在回调返回前复制本对象，
+ * 由其中的 `SharedFrame` 延长图像寿命。几何参数只从 `image` 指向的帧读取。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-struct ArmorDetectionsSourceFrame
+template <CameraTypes::FrameLayout FrameLayoutV>
+struct DetectedFrame
 {
-  /// 相机基础类型。
-  using Base = CameraBase<CameraInfoV>;
-  /// 同步图像帧类型。
+  using Base = CameraBase<FrameLayoutV>;
   using ImageFrame = typename Base::ImageFrame;
-  /// 同步 IMU 样本类型。
+  using SharedFrame = typename Base::SharedFrame;
   using ImuStamped = typename Base::ImuStamped;
 
-  uint64_t image_timestamp_us{0};       ///< 图像帧传感器时间戳，单位 us。
-  const ImageFrame* image_frame{nullptr}; ///< 原始图像帧，只在回调期间有效。
-  const ImuStamped* imu{nullptr};       ///< 与图像对齐的 IMU 样本，只在回调期间有效。
+  uint64_t sequence{};                 ///< CameraFrameSync 分配的帧序号。
+  SharedFrame image{};                 ///< 当前结果对应的共享图像所有权。
+  ImuStamped imu{};                    ///< 与图像对齐的 IMU 样本。
+  ArmorDetectorResults detections{};   ///< 本帧检测出的所有有效装甲板。
+
+  [[nodiscard]] const ImageFrame* GetImageFrame() const noexcept
+  {
+    return image.Get();
+  }
+
+  [[nodiscard]] bool Valid() const noexcept { return image.Valid(); }
 };
 
 /**
- * @brief 带原始同步帧引用的 detector 结果包。
- *
- * detector 在发布时把当前帧的结果和原始帧引用一起交给 tracker，
- * tracker 必须在回调里立刻消费，不能把这些指针跨帧保存。
- *
- * @tparam CameraInfoV 编译期相机参数。
+ * @brief armors_frame 普通 Topic 在同步回调期间借用的 payload。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-struct ArmorDetectionsFramePacket
-{
-  ArmorDetectionsSourceFrame<CameraInfoV> source_frame{}; ///< 当前检测结果对应的原始帧。
-  ArmorDetectionsPacket* detections{nullptr};             ///< 当前检测结果包。
-};
-
-/**
- * @brief armors_frame 的 Topic 数据类型。
- *
- * tracker 必须在回调内同步消费指针。
- *
- * @tparam CameraInfoV 编译期相机参数。
- */
-template <CameraTypes::CameraInfo CameraInfoV>
-using ArmorDetectionsFrameMessage = ArmorDetectionsFramePacket<CameraInfoV>*;
+template <CameraTypes::FrameLayout FrameLayoutV>
+using DetectedFrameMessage = const DetectedFrame<FrameLayoutV>*;

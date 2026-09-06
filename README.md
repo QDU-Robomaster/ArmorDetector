@@ -1,27 +1,28 @@
 # ArmorDetector
 
-`ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用 HailoRT 模型检测装甲板四角点，再根据相机内参求出装甲板在相机坐标系下的位姿。模块输出会保留当前同步帧引用，供 `ArmorTracker` 在同进程回调里立刻使用。
+`ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用 HailoRT 模型检测装甲板四角点，再根据原生传感器标定求出装甲板在相机坐标系下的位姿。模块输出按值携带共享图像句柄、IMU 和检测结果；逐帧几何始终从共享图像读取。
 
 ## 数据流
 
-1. 读取 `CameraFrameSync<Info>::SyncedFrame`。
-2. 将图像缩放到模型输入尺寸，并从 BGR 转成 RGB。
-3. 执行 HailoRT 推理，按当前模型适配器解码颜色、编号、置信度和四角点。
-4. 过滤低置信度、颜色不匹配、编号无效或几何异常的候选。
-5. 对有效候选执行 PnP，发布 `armor_detector/armors_frame`。
+1. 普通 Topic 回调借用 `const CameraFrameSync<Layout>::SyncedFrame*`；有空闲 `InferSlot` 时复制共享所有权，并直接预处理到该槽的 Hailo 输入绑定。三个固定 `InferSlot` 由两个设备内请求位和一个已预处理候补位组成；三者都忙时立即丢弃最新输入，不等待。
+2. inference dispatcher 最多提交两个 Hailo 异步请求，第三个 `InferSlot` 只保留下一张已预处理输入，避免设备完成后等待下一次图像回调；完成结果严格按提交顺序交给 output fusion。
+3. 单个 output worker 等待一个空闲 `PostSlot`，把 Hailo 输出整理为持久的 `CV_32F` 矩阵，再把同步帧和逐帧上下文移动到 `PostSlot`。移动完成后立即释放原 `InferSlot`，随后在同一线程执行 `DecodeOutput`、NMS、语义过滤、PnP 和发布；没有第三个 postprocess 线程或队列。
+4. 发布边界把图像所有权从 `PostSlot` 移进临时 `DetectedFrame`，把四角点、中心和包围盒映射到原生传感器坐标，使用原生 K/D 执行 PnP，并通过普通 Topic 同步发布 `const DetectedFrame*`。已经接纳的帧不会在内部阶段丢弃。
 
 ## 输入输出
 
 输入：
 
-- `CameraFrameSync<Info>::SyncedFrame`
+- `<camera image topic>_synced`：`const CameraFrameSync<Layout>::SyncedFrame*`
 - `host/robot_game_ref`，仅在 `referee_auto_detect_color: true` 时订阅
 
 输出：
 
-- `armor_detector/armors_frame`：本帧检测结果、图像时间戳、当前同步帧引用
+- `armor_detector/armors_frame`：`const DetectedFrame<Layout>*`
 
-`armors_frame` 里的图像和 IMU 指针只在本次回调期间有效。消费模块必须在回调内完成读取，不能跨帧保存这些指针。
+Topic 中的 `DetectedFrame*` 只在本次同步回调期间有效。异步消费者必须在回调返回前复制 `DetectedFrame`；其中的 `SharedFrame` 会保留 CameraBase 槽位，直到最后一份阶段对象释放。`FrameGeometry` 不重复存放，消费者只读取当前帧 `SharedFrame` 中的不可变参数。
+
+下游权威帧时间是 `SyncedFrame::imu.timestamp_us`，对应 MCU `FRAME_TRIGGER` 的陀螺仪时间。detector benchmark、结果 Topic 时间戳和后续链路都使用该时间；`ImageFrame::timestamp_us` 只作为明确命名的相机设备诊断时间保留。
 
 ## 模型
 
@@ -84,6 +85,8 @@ Hailo 路线现在只通过固定 `network.model` 枚举选择。当前支持的
 
 相机坐标系沿用 OpenCV 约定：`x` 向右，`y` 向下，`z` 向前。这里的位姿只描述装甲板相对相机的位置和朝向，不包含 IMU 姿态融合。
 
+发布的包围盒、中心和四角点使用原生传感器像素坐标；`center_norm`、网络解码、NMS、阈值、结果 TSV 和 detector preview 仍使用当前帧坐标。这保证 resize、wide decimation 或 ROI 不改变检测语义。
+
 ## 配置
 
 - `detect_color`：`0` 只保留红色，`1` 只保留蓝色，其他值不过滤颜色。
@@ -119,6 +122,6 @@ network:
 
 ## 使用要求
 
-- `Info` 里的图像尺寸、`step`、编码、内参和畸变参数必须与实际相机输出一致。
+- 模板参数只描述图像缓冲区最大宽高、`step` 和固定编码。原生标定由 `CameraFrameSync::Calibration()` 在构造期复制，ROI、下采样和翻转由每帧 `FrameGeometry` 描述。
 - 当前主检测模型固定使用 `640x512` 输入；原始图像可以是其他尺寸。
 - 原始视频、同步数据和回放包由相机或采集模块保存，不在 `ArmorDetector` 中落盘。

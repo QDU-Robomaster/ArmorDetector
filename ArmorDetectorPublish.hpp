@@ -8,20 +8,22 @@
 /**
  * @brief 将内部候选填充为对外 detector 结果包。
  *
- * 每个候选都会复制语义和 2D 几何，并使用模块相机参数执行 PnP。
+ * 每个候选都会复制语义，把发布的 2D 几何映射到原生传感器坐标，并使用
+ * 原生标定执行 PnP。检测、筛选和 `center_norm` 仍使用当前帧坐标。
  * PnP 成功时 pose、pnp_valid 和 pnp_reprojection_error_px 才有效。
  *
- * @tparam CameraInfoV 编译期相机参数。
+ * @tparam FrameLayoutV 编译期帧布局。
  * @param armors 内部候选列表。
- * @param bgr_img 源图像，用于归一化中心。
+ * @param bgr_img 源图像，用于计算帧内归一化中心。
+ * @param geometry 当前帧到原生传感器坐标系的映射。
  */
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::FillResultMessage(
-    const std::vector<CandidateArmor>& armors, const cv::Mat& bgr_img)
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::FillResultMessage(
+    const std::vector<CandidateArmor>& armors, const cv::Mat& bgr_img,
+    const CameraTypes::FrameGeometry& geometry, ArmorDetectorResults& results)
 {
-  armors_packet_.image_timestamp_us = latest_timestamp_us_;
-  armors_packet_.results.clear();
-  armors_packet_.results.reserve(armors.size());
+  results.clear();
+  results.reserve(armors.size());
 
   for (const auto& armor : armors)
   {
@@ -31,16 +33,19 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
     result.type = armor.type;
     result.priority = GetArmorPriority(armor.number);
     result.confidence = armor.confidence;
-    result.box = armor.box;
-    result.points = armor.points;
-    result.center = armor.center;
+    const auto publish_geometry = armor_detector_detail::MapPublishGeometry(
+        armor.points, armor.center, armor.box, geometry);
+    result.points = publish_geometry.points;
+    result.center = publish_geometry.center;
+    result.box = publish_geometry.box;
     result.center_norm = GetNormalizedCenter(bgr_img, armor.center);
-    result.distance_to_image_center = pnp_solver_.CalculateDistanceToCenter(armor.center);
+    result.distance_to_image_center =
+        pnp_solver_.CalculateDistanceToCenter(result.center);
 
     cv::Mat rvec;
     cv::Mat tvec;
     double pnp_reprojection_error_px = 0.0;
-    if (pnp_solver_.SolvePnP(armor.points, armor.type, rvec, tvec,
+    if (pnp_solver_.SolvePnP(result.points, armor.type, rvec, tvec,
                              &pnp_reprojection_error_px))
     {
       result.pnp_valid = true;
@@ -49,14 +54,14 @@ void ArmorDetector<CameraInfoV>::FillResultMessage(
       ++counters_.pnp_success_count;
     }
 
-    armors_packet_.results.emplace_back(std::move(result));
+    results.emplace_back(std::move(result));
   }
 
   MaybeDumpResultsTsv(armors);
 }
 
-template <CameraTypes::CameraInfo CameraInfoV>
-void ArmorDetector<CameraInfoV>::MaybeDumpResultsTsv(
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::MaybeDumpResultsTsv(
     const std::vector<CandidateArmor>& armors)
 {
   const char* path = std::getenv("ARMOR_DETECTOR_DUMP_TSV");
@@ -78,14 +83,14 @@ void ArmorDetector<CameraInfoV>::MaybeDumpResultsTsv(
     file = std::fopen(active_path.c_str(), "w");
     if (file == nullptr)
     {
-      XR_LOG_ERROR("ArmorDetector failed to open dump TSV: %s",
-                   active_path.c_str());
+      XR_LOG_ERROR("ArmorDetector failed to open dump TSV: %s", active_path.c_str());
       active_path.clear();
       return;
     }
-    std::fprintf(
-        file,
-        "frame_index\timage_timestamp_us\tresult_index\tcolor\tnumber\tconfidence\tcenter_x\tcenter_y\tp0_x\tp0_y\tp1_x\tp1_y\tp2_x\tp2_y\tp3_x\tp3_y\n");
+    std::fprintf(file,
+                 "frame_index\tframe_timestamp_us\tcamera_timestamp_us\tresult_"
+                 "index\tcolor\tnumber\tconfidence\tcenter_x\tcenter_y\tp0_x\tp0_y\tp1_"
+                 "x\tp1_y\tp2_x\tp2_y\tp3_x\tp3_y\n");
     std::fflush(file);
   }
 
@@ -99,22 +104,18 @@ void ArmorDetector<CameraInfoV>::MaybeDumpResultsTsv(
     const auto& armor = armors[index];
     std::fprintf(
         file,
-        "%llu\t%llu\t%zu\t%u\t%u\t%.9f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",
+        "%llu\t%llu\t%llu\t%zu\t%u\t%u\t%.9f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%"
+        ".6f\t%"
+        ".6f\t%.6f\n",
         static_cast<unsigned long long>(frame_index_ + 1U),
-        static_cast<unsigned long long>(latest_timestamp_us_),
-        index,
-        static_cast<unsigned>(armor.color),
-        static_cast<unsigned>(armor.number),
-        static_cast<double>(armor.confidence),
-        static_cast<double>(armor.center.x),
-        static_cast<double>(armor.center.y),
-        static_cast<double>(armor.points[0].x),
-        static_cast<double>(armor.points[0].y),
-        static_cast<double>(armor.points[1].x),
-        static_cast<double>(armor.points[1].y),
-        static_cast<double>(armor.points[2].x),
-        static_cast<double>(armor.points[2].y),
-        static_cast<double>(armor.points[3].x),
+        static_cast<unsigned long long>(latest_frame_timestamp_us_),
+        static_cast<unsigned long long>(latest_camera_timestamp_us_), index,
+        static_cast<unsigned>(armor.color), static_cast<unsigned>(armor.number),
+        static_cast<double>(armor.confidence), static_cast<double>(armor.center.x),
+        static_cast<double>(armor.center.y), static_cast<double>(armor.points[0].x),
+        static_cast<double>(armor.points[0].y), static_cast<double>(armor.points[1].x),
+        static_cast<double>(armor.points[1].y), static_cast<double>(armor.points[2].x),
+        static_cast<double>(armor.points[2].y), static_cast<double>(armor.points[3].x),
         static_cast<double>(armor.points[3].y));
   }
   std::fflush(file);
