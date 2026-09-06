@@ -178,15 +178,38 @@ bool ArmorDetector<FrameLayoutV>::PipelineDrained() const noexcept
   const uint64_t admitted = pipeline_admitted_count_.load(std::memory_order_acquire);
   const uint64_t completed = pipeline_completed_count_.load(std::memory_order_acquire);
   const bool drained = admitted == completed;
-  if (drained)
-  {
-    AutoAimReplayBenchmark::RecordDetectorPipelineCounters(
-        admitted, completed, pipeline_prepare_drop_count_.load(std::memory_order_relaxed),
-        pipeline_no_free_count_.load(std::memory_order_relaxed), 0U, 0U, 0U, 0U,
-        pipeline_infer_fail_count_.load(std::memory_order_relaxed),
-        pipeline_post_fail_count_.load(std::memory_order_relaxed));
-  }
   return drained;
+}
+
+template <CameraTypes::FrameLayout FrameLayoutV>
+void ArmorDetector<FrameLayoutV>::OnMonitor()
+{
+  const auto preprocess = preprocess_duration_.GetSummary();
+  const auto inference_worker = inference_worker_duration_.GetSummary();
+  const auto postprocess = postprocess_duration_.GetSummary();
+  const auto result = result_duration_.GetSummary();
+  XR_LOG_INFO(
+      "ArmorDetector duration count/average/minimum/maximum_us "
+      "preprocess=%llu/%llu/%llu/%llu inference_worker=%llu/%llu/%llu/%llu",
+      static_cast<unsigned long long>(preprocess.sample_count),
+      static_cast<unsigned long long>(preprocess.average_us),
+      static_cast<unsigned long long>(preprocess.minimum_us),
+      static_cast<unsigned long long>(preprocess.maximum_us),
+      static_cast<unsigned long long>(inference_worker.sample_count),
+      static_cast<unsigned long long>(inference_worker.average_us),
+      static_cast<unsigned long long>(inference_worker.minimum_us),
+      static_cast<unsigned long long>(inference_worker.maximum_us));
+  XR_LOG_INFO(
+      "ArmorDetector duration count/average/minimum/maximum_us "
+      "postprocess=%llu/%llu/%llu/%llu result=%llu/%llu/%llu/%llu",
+      static_cast<unsigned long long>(postprocess.sample_count),
+      static_cast<unsigned long long>(postprocess.average_us),
+      static_cast<unsigned long long>(postprocess.minimum_us),
+      static_cast<unsigned long long>(postprocess.maximum_us),
+      static_cast<unsigned long long>(result.sample_count),
+      static_cast<unsigned long long>(result.average_us),
+      static_cast<unsigned long long>(result.minimum_us),
+      static_cast<unsigned long long>(result.maximum_us));
 }
 
 template <CameraTypes::FrameLayout FrameLayoutV>
@@ -215,14 +238,6 @@ bool ArmorDetector<FrameLayoutV>::AdmitSyncedFrame(const SyncedFrame& synced_fra
   {
     std::lock_guard<std::mutex> lock(pipeline_mutex_);
     bool found = false;
-    uint32_t slots_busy_before_admission = 0U;
-    for (const auto& slot : infer_slots_)
-    {
-      slots_busy_before_admission += slot.state.load(std::memory_order_relaxed) !=
-                                             armor_detector_pipeline::InferSlotState::FREE
-                                         ? 1U
-                                         : 0U;
-    }
     uint8_t candidate_slot_id = 0U;
     for (auto& slot : infer_slots_)
     {
@@ -245,14 +260,6 @@ bool ArmorDetector<FrameLayoutV>::AdmitSyncedFrame(const SyncedFrame& synced_fra
       context.frame_timestamp_us =
           static_cast<uint64_t>(context.synced_frame.imu.timestamp_us);
       context.camera_timestamp_us = static_cast<uint64_t>(image->timestamp_us);
-      context.admission_sequence = armor_detector_pipeline::NextGeneration(
-          next_admission_sequence_.load(std::memory_order_relaxed));
-      next_admission_sequence_.store(context.admission_sequence,
-                                     std::memory_order_relaxed);
-      context.infer_slot_id = slot_id;
-      context.infer_generation = generation;
-      context.slot_acquire_ns = PipelineNowNs();
-      context.slots_busy_before_admission = slots_busy_before_admission;
       slot.state.store(armor_detector_pipeline::InferSlotState::PREPARING,
                        std::memory_order_release);
       found = true;
@@ -262,7 +269,6 @@ bool ArmorDetector<FrameLayoutV>::AdmitSyncedFrame(const SyncedFrame& synced_fra
     if (!found)
     {
       pipeline_no_free_count_.fetch_add(1U, std::memory_order_relaxed);
-      AutoAimReplayBenchmark::RecordPipelineNoFree();
       const uint64_t drops =
           pipeline_prepare_drop_count_.fetch_add(1U, std::memory_order_relaxed) + 1U;
       if (drops <= 5U || (drops % 100U) == 0U)
@@ -285,36 +291,39 @@ bool ArmorDetector<FrameLayoutV>::AdmitSyncedFrame(const SyncedFrame& synced_fra
   const bool input_view_valid_before =
       network_.IsRawInputView(hailo_buffers.raw_output, hailo_buffers.network_input);
   cv::Mat working_network_input = hailo_buffers.network_input;
-  try
   {
-    if (input_view_valid_before)
+    auto preprocess_measurement = preprocess_duration_.Measure();
+    try
     {
-      const auto& geometry = image->geometry;
-      const int cv_type = detail::CvTypeFromEncoding(frame_layout.encoding);
-      if (cv_type >= 0)
+      if (input_view_valid_before)
       {
-        cv::Mat source(static_cast<int>(geometry.height),
-                       static_cast<int>(geometry.width), cv_type,
-                       const_cast<uint8_t*>(image->data.data()),
-                       static_cast<std::size_t>(geometry.step));
-        const cv::Mat bgr =
-            detail::ConvertToBgrWithEncoding(source, frame_layout.encoding);
-        prepared = BuildNetworkInput(bgr, context.input_mapping, slot.preprocess_scratch,
-                                     working_network_input);
+        const auto& geometry = image->geometry;
+        const int cv_type = detail::CvTypeFromEncoding(frame_layout.encoding);
+        if (cv_type >= 0)
+        {
+          cv::Mat source(static_cast<int>(geometry.height),
+                         static_cast<int>(geometry.width), cv_type,
+                         const_cast<uint8_t*>(image->data.data()),
+                         static_cast<std::size_t>(geometry.step));
+          const cv::Mat bgr =
+              detail::ConvertToBgrWithEncoding(source, frame_layout.encoding);
+          prepared = BuildNetworkInput(bgr, context.input_mapping,
+                                       slot.preprocess_scratch, working_network_input);
+        }
       }
     }
-  }
-  catch (const cv::Exception& exception)
-  {
-    XR_LOG_ERROR("ArmorDetector preprocess exception: %s", exception.what());
-  }
-  catch (const std::exception& exception)
-  {
-    XR_LOG_ERROR("ArmorDetector preprocess exception: %s", exception.what());
-  }
-  catch (...)
-  {
-    XR_LOG_ERROR("ArmorDetector preprocess exception: unknown");
+    catch (const cv::Exception& exception)
+    {
+      XR_LOG_ERROR("ArmorDetector preprocess exception: %s", exception.what());
+    }
+    catch (const std::exception& exception)
+    {
+      XR_LOG_ERROR("ArmorDetector preprocess exception: %s", exception.what());
+    }
+    catch (...)
+    {
+      XR_LOG_ERROR("ArmorDetector preprocess exception: unknown");
+    }
   }
   const auto preprocess_end = std::chrono::steady_clock::now();
   const bool input_view_valid_after =
@@ -348,7 +357,6 @@ bool ArmorDetector<FrameLayoutV>::AdmitSyncedFrame(const SyncedFrame& synced_fra
   pipeline_admitted_count_.fetch_add(1U, std::memory_order_relaxed);
   slot.state.store(armor_detector_pipeline::InferSlotState::INFER_QUEUED,
                    std::memory_order_release);
-  context.infer_enqueue_ns = PipelineNowNs();
   const bool infer_queued = inference_queue_.TryPush({slot_id, generation});
   ASSERT(infer_queued);
   (void)infer_queued;
@@ -440,7 +448,7 @@ int ArmorDetector<FrameLayoutV>::TargetColorFromRobotId(uint8_t robot_id)
  * @param synced_frame 原始同步帧。
  */
 template <CameraTypes::FrameLayout FrameLayoutV>
-int64_t ArmorDetector<FrameLayoutV>::ProcessImage(
+void ArmorDetector<FrameLayoutV>::ProcessImage(
     const cv::Mat& img_msg, SyncedFrame& synced_frame,
     std::vector<CandidateArmor>&& armors, uint64_t frame_timestamp_us,
     uint64_t camera_timestamp_us,
@@ -450,14 +458,14 @@ int64_t ArmorDetector<FrameLayoutV>::ProcessImage(
 {
   if (img_msg.empty())
   {
-    return 0;
+    return;
   }
 
   const auto* image_frame = synced_frame.GetImageFrame();
   if (image_frame == nullptr)
   {
     XR_LOG_ERROR("ArmorDetector received null synced image");
-    return 0;
+    return;
   }
 
   detected_frame_.sequence = synced_frame.sequence;
@@ -497,12 +505,16 @@ int64_t ArmorDetector<FrameLayoutV>::ProcessImage(
                 static_cast<unsigned long long>(next_frame_index));
   }
   const auto result_begin = std::chrono::steady_clock::now();
-  FillResultMessage(armors, bgr_img, image_frame->geometry, detected_frame_.detections);
-  detected_frame_.detections.erase(
-      std::remove_if(detected_frame_.detections.begin(), detected_frame_.detections.end(),
-                     [](const ArmorDetectorResult& armor)
-                     { return armor.number == ArmorNumber::OUTPOST; }),
-      detected_frame_.detections.end());
+  {
+    auto result_measurement = result_duration_.Measure();
+    FillResultMessage(armors, bgr_img, image_frame->geometry, detected_frame_.detections);
+    detected_frame_.detections.erase(
+        std::remove_if(
+            detected_frame_.detections.begin(), detected_frame_.detections.end(),
+            [](const ArmorDetectorResult& armor)
+            { return armor.number == ArmorNumber::OUTPOST; }),
+        detected_frame_.detections.end());
+  }
   const auto result_finish = std::chrono::steady_clock::now();
   if (trace_frame)
   {
@@ -535,33 +547,6 @@ int64_t ArmorDetector<FrameLayoutV>::ProcessImage(
   metrics_msg_.result_latency_ms =
       std::chrono::duration<double, std::milli>(result_finish - result_begin).count();
 
-  AutoAimReplayBenchmark::RecordDetector(
-      frame_timestamp_us, metrics_msg_.preprocess_latency_ms,
-      metrics_msg_.infer_latency_ms, metrics_msg_.postprocess_latency_ms,
-      metrics_msg_.hailo_infer_latency_ms, metrics_msg_.hailo_tail_latency_ms,
-      metrics_msg_.detector_latency_ms, metrics_msg_.result_latency_ms,
-      metrics_msg_.armor_count, metrics_msg_.pnp_success_count);
-  for (const auto& armor : detected_frame_.detections)
-  {
-    AutoAimReplayBenchmark::DetectionRecord detection{};
-    detection.color = static_cast<int>(armor.color);
-    detection.type = static_cast<int>(armor.type);
-    detection.number = static_cast<int>(armor.number);
-    detection.confidence = static_cast<double>(armor.confidence);
-    detection.pnp_valid = armor.pnp_valid;
-    detection.pnp_error_px = armor.pnp_reprojection_error_px;
-    for (std::size_t index = 0; index < armor.points.size(); ++index)
-    {
-      detection.corners[index * 2U] = armor.points[index].x;
-      detection.corners[index * 2U + 1U] = armor.points[index].y;
-    }
-    for (std::size_t index = 0; index < detection.translation.size(); ++index)
-    {
-      detection.translation[index] = armor.pose.translation[index];
-    }
-    AutoAimReplayBenchmark::RecordDetection(frame_timestamp_us, std::move(detection));
-  }
-
   DetectionMessage armors_frame_msg = &detected_frame_;
   const LibXR::MicrosecondTimestamp publish_timestamp(frame_timestamp_us);
   if (trace_frame)
@@ -570,7 +555,6 @@ int64_t ArmorDetector<FrameLayoutV>::ProcessImage(
                 static_cast<unsigned long long>(frame_index_));
   }
   armors_frame_topic_.Publish(armors_frame_msg, publish_timestamp);
-  const int64_t output_publish_ns = PipelineNowNs();
   if (trace_frame)
   {
     XR_LOG_INFO("ArmorDetector trace frame=%llu step=publish_end",
@@ -629,7 +613,6 @@ int64_t ArmorDetector<FrameLayoutV>::ProcessImage(
             pipeline_post_fail_count_.load(std::memory_order_relaxed)),
         inference_queue_.Size(), output_queue_.Size());
   }
-  return output_publish_ns;
 }
 
 /**
@@ -708,6 +691,7 @@ void ArmorDetector<FrameLayoutV>::SubmitPreview(const cv::Mat& bgr_img,
 template <CameraTypes::FrameLayout FrameLayoutV>
 void ArmorDetector<FrameLayoutV>::RunInference(armor_detector_pipeline::WorkItem item)
 {
+  auto inference_worker_measurement = inference_worker_duration_.Measure();
   const uint8_t slot_id = item.slot_id;
   if (slot_id >= infer_slots_.size())
   {
@@ -731,23 +715,6 @@ void ArmorDetector<FrameLayoutV>::RunInference(armor_detector_pipeline::WorkItem
   auto& context = slot.context;
   ASSERT(slot.hailo_buffer_id < hailo_buffer_pool_.size());
   auto& hailo_buffers = hailo_buffer_pool_[slot.hailo_buffer_id];
-  context.infer_start_ns = PipelineNowNs();
-  if (previous_infer_start_ns_ != 0)
-  {
-    context.infer_worker_period_ns = context.infer_start_ns - previous_infer_start_ns_;
-  }
-  const int64_t previous_infer_end_ns =
-      previous_infer_end_ns_.load(std::memory_order_acquire);
-  if (previous_infer_end_ns != 0)
-  {
-    context.infer_worker_intercall_gap_ns =
-        std::max<int64_t>(0, context.infer_start_ns - previous_infer_end_ns);
-    context.infer_worker_dispatch_gap_ns =
-        std::max<int64_t>(0, context.infer_start_ns - std::max(context.infer_enqueue_ns,
-                                                               previous_infer_end_ns));
-  }
-  previous_infer_start_ns_ = context.infer_start_ns;
-
   bool ok = false;
   detail::ArmorDetectorNetwork::HailoRawTimingSnapshot sync_timing{};
   if (!network_.IsRawInputView(hailo_buffers.raw_output, hailo_buffers.network_input))
@@ -759,7 +726,6 @@ void ArmorDetector<FrameLayoutV>::RunInference(armor_detector_pipeline::WorkItem
   }
   try
   {
-    AutoAimReplayBenchmark::RecordDetectorStart(context.frame_timestamp_us);
     ok = async_inference_enabled_
              ? network_.PrepareRawAsync(hailo_buffers.network_input,
                                         hailo_buffers.raw_output)
@@ -793,12 +759,7 @@ void ArmorDetector<FrameLayoutV>::RunInference(armor_detector_pipeline::WorkItem
       ReleaseInferSlotLocked(item);
       return;
     }
-    context.infer_submit_ns = sync_timing.call_begin_ns;
-    context.infer_complete_ns = sync_timing.complete_ns;
-    context.infer_end_ns = sync_timing.complete_ns;
     context.infer_timing = sync_timing;
-    previous_infer_end_ns_.store(context.infer_end_ns, std::memory_order_release);
-    context.infer_backlog_after_call = !inference_queue_.Empty();
 
     pipeline_cv_.wait(
         lock,
@@ -845,14 +806,7 @@ void ArmorDetector<FrameLayoutV>::RunInference(armor_detector_pipeline::WorkItem
       ReleaseInferSlotLocked(item);
       return;
     }
-    context.async_admission_seq = next_async_admission_seq_++;
-    context.async_request_id = next_async_request_id_++;
-    context.inflight_before_submit = async_inflight_;
     ++async_inflight_;
-    context.inflight_after_submit = async_inflight_;
-    async_inflight_high_water_ = std::max(async_inflight_high_water_, async_inflight_);
-    context.inflight_high_water_after_submit = async_inflight_high_water_;
-    context.infer_backlog_after_call = !inference_queue_.Empty();
   }
 
   int64_t submit_return_ns = 0;
@@ -881,7 +835,6 @@ void ArmorDetector<FrameLayoutV>::RunInference(armor_detector_pipeline::WorkItem
       pipeline_infer_fail_count_.fetch_add(1U, std::memory_order_relaxed);
       return;
     }
-    context.infer_submit_ns = submit_return_ns;
   }
   if (!submitted)
   {
@@ -917,20 +870,13 @@ void ArmorDetector<FrameLayoutV>::HandleInferenceCompletion(
       return;
     }
 
-    context.infer_complete_ns = timing.complete_ns;
-    context.infer_end_ns = context.infer_complete_ns;
-    context.async_completion_seq = next_async_completion_seq_++;
-    context.inflight_at_complete = async_inflight_;
     if (async_inflight_ > 0U)
     {
       --async_inflight_;
     }
-    context.completion_reordered =
-        context.async_admission_seq != context.async_completion_seq;
     context.infer_timing = timing;
     context.async_ok = completion_ok;
     context.async_completed = true;
-    previous_infer_end_ns_.store(context.infer_end_ns, std::memory_order_release);
   }
   pipeline_cv_.notify_all();
 }
@@ -1088,7 +1034,6 @@ bool ArmorDetector<FrameLayoutV>::HandoffInferToPostLocked(
     return false;
   }
 
-  post_slot.context.output_enqueue_ns = PipelineNowNs();
   ReleaseInferSlotLocked(infer_item);
   return true;
 }
@@ -1110,14 +1055,6 @@ void ArmorDetector<FrameLayoutV>::RunOutputFusion(armor_detector_pipeline::WorkI
   }
 
   auto& post_context = post_slot.context;
-  post_context.output_start_ns = PipelineNowNs();
-  if (previous_output_start_ns_ != 0)
-  {
-    post_context.output_worker_period_ns =
-        post_context.output_start_ns - previous_output_start_ns_;
-  }
-  previous_output_start_ns_ = post_context.output_start_ns;
-
   ASSERT(post_slot.hailo_buffer_id < hailo_buffer_pool_.size());
   auto& post_buffers = hailo_buffer_pool_[post_slot.hailo_buffer_id];
   bool ok = false;
@@ -1134,8 +1071,6 @@ void ArmorDetector<FrameLayoutV>::RunOutputFusion(armor_detector_pipeline::WorkI
   {
     XR_LOG_ERROR("ArmorDetector output worker exception: unknown");
   }
-  post_context.output_end_ns = PipelineNowNs();
-
   if (!ok || !post_context.decode_timing.valid)
   {
     pipeline_post_fail_count_.fetch_add(1U, std::memory_order_relaxed);
@@ -1154,7 +1089,6 @@ void ArmorDetector<FrameLayoutV>::RunOutputFusion(armor_detector_pipeline::WorkI
       return;
     }
 
-    post_slot.context.post_enqueue_ns = PipelineNowNs();
     post_slot.state.store(armor_detector_pipeline::PostSlotState::POST_QUEUED,
                           std::memory_order_release);
   }
@@ -1184,13 +1118,6 @@ void ArmorDetector<FrameLayoutV>::RunPostprocess(armor_detector_pipeline::WorkIt
     return;
   }
   auto& context = slot.context;
-  context.post_start_ns = PipelineNowNs();
-  if (previous_post_start_ns_ != 0)
-  {
-    context.post_worker_period_ns = context.post_start_ns - previous_post_start_ns_;
-  }
-  previous_post_start_ns_ = context.post_start_ns;
-
   bool ok = false;
   try
   {
@@ -1212,16 +1139,19 @@ void ArmorDetector<FrameLayoutV>::RunPostprocess(armor_detector_pipeline::WorkIt
           counters_ = {};
           MaybeDumpModelOutput(slot.decoded_output);
           const auto postprocess_begin = std::chrono::steady_clock::now();
-          auto armors = DecodeOutput(bgr, context.input_mapping, slot.decoded_output);
+          std::vector<CandidateArmor> armors;
+          {
+            auto postprocess_measurement = postprocess_duration_.Measure();
+            armors = DecodeOutput(bgr, context.input_mapping, slot.decoded_output);
+          }
           const auto postprocess_end = std::chrono::steady_clock::now();
           context.postprocess_latency_ms = std::chrono::duration<double, std::milli>(
                                                postprocess_end - postprocess_begin)
                                                .count();
-          context.output_publish_ns = ProcessImage(
-              bgr, context.synced_frame, std::move(armors), context.frame_timestamp_us,
-              context.camera_timestamp_us, context.infer_timing, context.decode_timing,
-              context.preprocess_latency_ms, context.postprocess_latency_ms);
-          context.async_output_seq = next_async_output_seq_++;
+          ProcessImage(bgr, context.synced_frame, std::move(armors),
+                       context.frame_timestamp_us, context.camera_timestamp_us,
+                       context.infer_timing, context.decode_timing,
+                       context.preprocess_latency_ms, context.postprocess_latency_ms);
           ok = true;
         }
       }
@@ -1240,69 +1170,9 @@ void ArmorDetector<FrameLayoutV>::RunPostprocess(armor_detector_pipeline::WorkIt
   {
     pipeline_post_fail_count_.fetch_add(1U, std::memory_order_relaxed);
   }
-  context.post_end_ns = PipelineNowNs();
-  const uint64_t timing_timestamp_us = context.frame_timestamp_us;
-  const int64_t timing_slot_acquire_ns = context.slot_acquire_ns;
-  const int64_t timing_infer_enqueue_ns = context.infer_enqueue_ns;
-  const int64_t timing_infer_start_ns = context.infer_start_ns;
-  const int64_t timing_infer_end_ns = context.infer_end_ns;
-  const int64_t timing_infer_worker_period_ns = context.infer_worker_period_ns;
-  const int64_t timing_infer_worker_intercall_gap_ns =
-      context.infer_worker_intercall_gap_ns;
-  const int64_t timing_infer_worker_dispatch_gap_ns =
-      context.infer_worker_dispatch_gap_ns;
-  const int64_t timing_output_enqueue_ns = context.output_enqueue_ns;
-  const int64_t timing_output_start_ns = context.output_start_ns;
-  const int64_t timing_output_worker_period_ns = context.output_worker_period_ns;
-  const int64_t timing_output_end_ns = context.output_end_ns;
-  const int64_t timing_post_enqueue_ns = context.post_enqueue_ns;
-  const int64_t timing_post_start_ns = context.post_start_ns;
-  const int64_t timing_post_worker_period_ns = context.post_worker_period_ns;
-  const int64_t timing_post_end_ns = context.post_end_ns;
-  const uint32_t timing_slots_busy_before_admission = context.slots_busy_before_admission;
-  const uint8_t timing_infer_slot_id = context.infer_slot_id;
-  const uint64_t timing_infer_generation = context.infer_generation;
-  const bool timing_infer_backlog_after_call = context.infer_backlog_after_call;
-  const uint64_t timing_async_admission_seq = context.async_admission_seq;
-  const uint64_t timing_async_request_id = context.async_request_id;
-  const int64_t timing_infer_submit_ns = context.infer_submit_ns;
-  const int64_t timing_infer_complete_ns = context.infer_complete_ns;
-  const uint64_t timing_async_completion_seq = context.async_completion_seq;
-  const uint32_t timing_inflight_before_submit = context.inflight_before_submit;
-  const uint32_t timing_inflight_after_submit = context.inflight_after_submit;
-  const uint32_t timing_inflight_at_complete = context.inflight_at_complete;
-  const uint32_t timing_inflight_high_water_after_submit =
-      context.inflight_high_water_after_submit;
-  const bool timing_completion_reordered = context.completion_reordered;
-  const int64_t timing_output_publish_ns = context.output_publish_ns;
-  const uint64_t timing_async_output_seq = context.async_output_seq;
   slot.state.store(armor_detector_pipeline::PostSlotState::POST_DONE,
                    std::memory_order_release);
-  uint64_t timing_no_free_count_at_release = 0U;
-  const int64_t slot_release_ns = ReleasePostSlot(item, &timing_no_free_count_at_release);
-  if (ok)
-  {
-    AutoAimReplayBenchmark::RecordPipelineTiming(
-        timing_timestamp_us, timing_slot_acquire_ns, timing_infer_enqueue_ns,
-        timing_infer_start_ns, timing_infer_end_ns, timing_infer_worker_period_ns,
-        timing_infer_worker_intercall_gap_ns, timing_infer_worker_dispatch_gap_ns,
-        timing_output_enqueue_ns, timing_output_start_ns, timing_output_worker_period_ns,
-        timing_output_end_ns, timing_post_enqueue_ns, timing_post_start_ns,
-        timing_post_worker_period_ns, timing_post_end_ns, slot_release_ns,
-        timing_slots_busy_before_admission, timing_infer_slot_id, timing_infer_generation,
-        timing_infer_backlog_after_call, timing_no_free_count_at_release);
-    if (async_inference_enabled_)
-    {
-      AutoAimReplayBenchmark::RecordAsyncPipelineTiming(
-          timing_timestamp_us, timing_async_admission_seq, timing_async_request_id,
-          timing_infer_submit_ns, timing_infer_complete_ns, timing_async_completion_seq,
-          timing_inflight_before_submit, timing_inflight_after_submit,
-          timing_inflight_at_complete, timing_inflight_high_water_after_submit,
-          timing_completion_reordered, timing_post_enqueue_ns, timing_post_start_ns,
-          timing_output_publish_ns, timing_post_end_ns, timing_async_output_seq,
-          slot_release_ns);
-    }
-  }
+  ReleasePostSlot(item);
 }
 
 template <CameraTypes::FrameLayout FrameLayoutV>
@@ -1340,27 +1210,27 @@ void ArmorDetector<FrameLayoutV>::ReleaseInferSlotLocked(
 }
 
 template <CameraTypes::FrameLayout FrameLayoutV>
-int64_t ArmorDetector<FrameLayoutV>::ReleasePostSlot(
-    armor_detector_pipeline::WorkItem item, uint64_t* no_free_count_at_release)
+void ArmorDetector<FrameLayoutV>::ReleasePostSlot(
+    armor_detector_pipeline::WorkItem item)
 {
   std::lock_guard<std::mutex> lock(pipeline_mutex_);
-  return ReleasePostSlotLocked(item, no_free_count_at_release);
+  ReleasePostSlotLocked(item);
 }
 
 template <CameraTypes::FrameLayout FrameLayoutV>
-int64_t ArmorDetector<FrameLayoutV>::ReleasePostSlotLocked(
-    armor_detector_pipeline::WorkItem item, uint64_t* no_free_count_at_release)
+void ArmorDetector<FrameLayoutV>::ReleasePostSlotLocked(
+    armor_detector_pipeline::WorkItem item)
 {
   if (item.slot_id >= post_slots_.size())
   {
-    return 0;
+    return;
   }
   auto& slot = post_slots_[item.slot_id];
   if (slot.generation.load(std::memory_order_relaxed) != item.generation ||
       slot.state.load(std::memory_order_relaxed) ==
           armor_detector_pipeline::PostSlotState::FREE)
   {
-    return 0;
+    return;
   }
 
   const bool completed = slot.context.admission_counted;
@@ -1371,13 +1241,7 @@ int64_t ArmorDetector<FrameLayoutV>::ReleasePostSlotLocked(
   }
   slot.state.store(armor_detector_pipeline::PostSlotState::FREE,
                    std::memory_order_release);
-  const int64_t slot_release_ns = PipelineNowNs();
-  if (no_free_count_at_release != nullptr)
-  {
-    *no_free_count_at_release = pipeline_no_free_count_.load(std::memory_order_relaxed);
-  }
   pipeline_cv_.notify_all();
-  return slot_release_ns;
 }
 
 template <CameraTypes::FrameLayout FrameLayoutV>

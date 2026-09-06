@@ -40,6 +40,7 @@ required_hardware: []
 depends:
   - qdu-future/CameraFrameSync
   - qdu-future/VisionPreview
+  - xrobot-org/DurationStatistics
 === END MANIFEST === */
 // clang-format on
 
@@ -81,8 +82,8 @@ depends:
 #include "ArmorDetectorPnPSolver.hpp"
 #include "ArmorDetectorPublishGeometry.hpp"
 #include "ArmorDetectorTypes.hpp"
-#include "AutoAimReplayBenchmark.hpp"
 #include "CameraFrameSync.hpp"
+#include "DurationStatistics.hpp"
 #include "VisionPreview.hpp"
 #include "app_framework.hpp"
 #include "infer/ArmorDetectorModelAdapter.hpp"
@@ -218,9 +219,9 @@ class ArmorDetector : public LibXR::Application
   [[nodiscard]] bool PipelineDrained() const noexcept;
 
   /**
-   * @brief LibXR monitor hook，当前 detector 没有周期性 monitor 工作。
+   * @brief 输出 detector 本地阶段耗时统计。
    */
-  void OnMonitor() override {}
+  void OnMonitor() override;
 
  private:
   /**
@@ -303,7 +304,7 @@ class ArmorDetector : public LibXR::Application
    * @param img_msg BGR 图像。
    * @param synced_frame 原始同步帧，用于复制共享图像所有权和同步 IMU。
    */
-  int64_t ProcessImage(
+  void ProcessImage(
       const cv::Mat& img_msg, SyncedFrame& synced_frame,
       std::vector<CandidateArmor>&& armors, uint64_t frame_timestamp_us,
       uint64_t camera_timestamp_us,
@@ -343,11 +344,9 @@ class ArmorDetector : public LibXR::Application
 
   void ReleaseInferSlotLocked(armor_detector_pipeline::WorkItem item);
 
-  int64_t ReleasePostSlot(armor_detector_pipeline::WorkItem item,
-                          uint64_t* no_free_count_at_release = nullptr);
+  void ReleasePostSlot(armor_detector_pipeline::WorkItem item);
 
-  int64_t ReleasePostSlotLocked(armor_detector_pipeline::WorkItem item,
-                                uint64_t* no_free_count_at_release = nullptr);
+  void ReleasePostSlotLocked(armor_detector_pipeline::WorkItem item);
 
   /**
    * @brief 对单帧 BGR 图像执行网络检测和后处理。
@@ -534,58 +533,19 @@ class ArmorDetector : public LibXR::Application
   static constexpr std::size_t post_slot_count = 2U;
   static constexpr uint32_t async_inflight_limit = infer_inflight_slot_count;
 
-  static int64_t PipelineNowNs() noexcept
-  {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-  }
-
   struct PipelineFrameContext
   {
     uint64_t frame_timestamp_us{0};
     uint64_t camera_timestamp_us{0};
-    uint64_t admission_sequence{0};
     bool admission_counted{false};
-    uint8_t infer_slot_id{0};
-    uint64_t infer_generation{0};
     detail::NetworkInputMapping input_mapping{};
     SyncedFrame synced_frame{};
     detail::ArmorDetectorNetwork::HailoRawTimingSnapshot infer_timing{};
     detail::ArmorDetectorNetwork::HailoDecodeTimingSnapshot decode_timing{};
     double preprocess_latency_ms{0.0};
     double postprocess_latency_ms{0.0};
-    int64_t slot_acquire_ns{0};
-    int64_t infer_enqueue_ns{0};
-    int64_t infer_start_ns{0};
-    int64_t infer_end_ns{0};
-    int64_t infer_worker_period_ns{0};
-    int64_t infer_worker_intercall_gap_ns{0};
-    int64_t infer_worker_dispatch_gap_ns{0};
-    int64_t output_enqueue_ns{0};
-    int64_t output_start_ns{0};
-    int64_t output_worker_period_ns{0};
-    int64_t output_end_ns{0};
-    int64_t post_enqueue_ns{0};
-    int64_t post_start_ns{0};
-    int64_t post_worker_period_ns{0};
-    int64_t post_end_ns{0};
-    uint32_t slots_busy_before_admission{0};
-    bool infer_backlog_after_call{false};
     bool async_completed{false};
     bool async_ok{false};
-    uint64_t async_admission_seq{0};
-    uint64_t async_request_id{0};
-    int64_t infer_submit_ns{0};
-    int64_t infer_complete_ns{0};
-    uint64_t async_completion_seq{0};
-    uint32_t inflight_before_submit{0};
-    uint32_t inflight_after_submit{0};
-    uint32_t inflight_at_complete{0};
-    uint32_t inflight_high_water_after_submit{0};
-    bool completion_reordered{false};
-    int64_t output_publish_ns{0};
-    uint64_t async_output_seq{0};
   };
 
   struct HailoBufferPair
@@ -646,25 +606,19 @@ class ArmorDetector : public LibXR::Application
   armor_detector_pipeline::OrderedAsyncCompletions<infer_slot_count> async_completions_{};
   mutable std::mutex pipeline_mutex_{};
   std::condition_variable pipeline_cv_{};
-  std::atomic<uint64_t> next_admission_sequence_{0};
   std::atomic<uint64_t> pipeline_admitted_count_{0};
   std::atomic<uint64_t> pipeline_completed_count_{0};
   std::atomic<uint64_t> pipeline_prepare_drop_count_{0};
   std::atomic<uint64_t> pipeline_no_free_count_{0};
   std::atomic<uint64_t> pipeline_infer_fail_count_{0};
   std::atomic<uint64_t> pipeline_post_fail_count_{0};
+  XRobot::DurationStatistics preprocess_duration_{};
+  XRobot::DurationStatistics inference_worker_duration_{};
+  XRobot::DurationStatistics postprocess_duration_{};
+  XRobot::DurationStatistics result_duration_{};
   std::atomic<bool> inference_worker_active_{false};
   std::atomic<bool> output_worker_active_{false};
-  int64_t previous_infer_start_ns_{0};
-  std::atomic<int64_t> previous_infer_end_ns_{0};
-  int64_t previous_output_start_ns_{0};
-  int64_t previous_post_start_ns_{0};
-  uint64_t next_async_admission_seq_{0};
-  uint64_t next_async_request_id_{0};
-  uint64_t next_async_completion_seq_{0};
-  uint64_t next_async_output_seq_{0};
   uint32_t async_inflight_{0};
-  uint32_t async_inflight_high_water_{0};
   bool async_inference_enabled_{true};
   std::atomic<bool> workers_started_{false};
   LibXR::Topic synced_frame_topic_ = LibXR::Topic();
