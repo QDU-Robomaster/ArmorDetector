@@ -13,6 +13,10 @@
 #define ARMOR_DETECTOR_INT16_FAST_HEF_PATH ""
 #endif
 
+#ifndef ARMOR_DETECTOR_OPENVINO_640X512_PATH
+#define ARMOR_DETECTOR_OPENVINO_640X512_PATH ""
+#endif
+
 enum class ArmorDetectorModel : uint8_t
 {
   INT8_HEAD_L = 0,
@@ -23,6 +27,7 @@ enum class ArmorDetectorModel : uint8_t
   INT16_HEAD = 5,
   INT16_FAST_L = 6,
   INT16_FAST = 7,
+  OPENVINO_640X512 = 8,
 };
 
 namespace armor_detector_infer
@@ -34,12 +39,46 @@ enum class ModelLine : uint8_t
   INT16 = 1,
 };
 
+enum class DetectorBackend : uint8_t
+{
+  HAILORT,
+  OPENVINO,
+};
+
+inline const char* detector_backend_name(DetectorBackend backend)
+{
+  return backend == DetectorBackend::OPENVINO ? "OPENVINO" : "HAILORT";
+}
+
+inline constexpr bool detector_backend_compiled(DetectorBackend backend)
+{
+  switch (backend)
+  {
+    case DetectorBackend::HAILORT:
+#if defined(ARMOR_DETECTOR_HAVE_HAILORT)
+      return true;
+#else
+      return false;
+#endif
+    case DetectorBackend::OPENVINO:
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+      return true;
+#else
+      return false;
+#endif
+    default:
+      return false;
+  }
+}
+
 struct ResolvedDetectorModel
 {
   const char* canonical_name{""};
   ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
   ModelLine line{ModelLine::INT16};
   const char* hailort_hef_path{""};
+  DetectorBackend backend{DetectorBackend::HAILORT};
+  const char* openvino_model_path{""};
 };
 
 struct ModelInferAdapter
@@ -80,8 +119,10 @@ inline const char* detector_model_name(ArmorDetectorModel model)
       return "int16-fast-l";
     case ArmorDetectorModel::INT16_FAST:
       return "int16-fast";
+    case ArmorDetectorModel::OPENVINO_640X512:
+      return "openvino-640x512";
     default:
-      return "int16-quality-l";
+      return "unknown";
   }
 }
 
@@ -141,6 +182,14 @@ inline const ResolvedDetectorModel* resolve_detector_model(ArmorDetectorModel mo
           ModelLine::INT16,
           ARMOR_DETECTOR_INT16_FAST_HEF_PATH,
       },
+      {
+          "openvino-640x512",
+          ArmorDetectorModel::OPENVINO_640X512,
+          ModelLine::INT16,
+          "",
+          DetectorBackend::OPENVINO,
+          ARMOR_DETECTOR_OPENVINO_640X512_PATH,
+      },
   };
 
   switch (model)
@@ -161,6 +210,8 @@ inline const ResolvedDetectorModel* resolve_detector_model(ArmorDetectorModel mo
       return &kVariants[6];
     case ArmorDetectorModel::INT16_FAST:
       return &kVariants[7];
+    case ArmorDetectorModel::OPENVINO_640X512:
+      return &kVariants[8];
     default:
       return nullptr;
   }

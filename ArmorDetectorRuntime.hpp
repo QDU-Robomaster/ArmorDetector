@@ -25,6 +25,11 @@ ArmorDetector<FrameLayoutV>::ArmorDetector(LibXR::HardwareContainer&,
     : sync_(sync), pnp_solver_(sync.Calibration())
 {
   SetConfig(cfg);
+  if (!network_.Ready())
+  {
+    return;
+  }
+  async_inference_enabled_ = network_.UsesHailoRt();
 
   if (const char* mode = std::getenv("ARMOR_DETECTOR_INFERENCE_MODE");
       mode != nullptr && mode[0] != '\0')
@@ -36,6 +41,12 @@ ArmorDetector<FrameLayoutV>::ArmorDetector(LibXR::HardwareContainer&,
     else if (std::string(mode) != "async")
     {
       XR_LOG_ERROR("ArmorDetector invalid inference mode '%s'", mode);
+      return;
+    }
+    else if (!network_.UsesHailoRt())
+    {
+      XR_LOG_ERROR("ArmorDetector backend=%s supports sync inference only",
+                   network_.BackendName().c_str());
       return;
     }
   }
@@ -126,26 +137,19 @@ void ArmorDetector<FrameLayoutV>::SetConfig(const Config& cfg)
   cfg_ = cfg;
   counters_ = {};
   preview_.Stop();
-  preview_.Start(cfg_.preview);
-
-  const auto* resolved_model = infer::resolve_detector_model(cfg_.network.model);
-  if (resolved_model == nullptr)
+  if (!network_.Configure(cfg_.network.model))
   {
-    XR_LOG_ERROR("ArmorDetector unknown model enum=%u, fallback to default %s",
-                 static_cast<unsigned>(cfg_.network.model),
-                 infer::detector_model_name(infer::default_detector_model));
+    XR_LOG_ERROR("ArmorDetector initialization failed for model=%s; pipeline not started",
+                 infer::detector_model_name(cfg_.network.model));
+    return;
   }
-  const auto& resolved = infer::resolve_detector_model_or_default(cfg_.network.model);
-
-  XR_LOG_INFO("ArmorDetector model=%s line=%s hef_path=%s", resolved.canonical_name,
-              infer::model_line_name(resolved.line), resolved.hailort_hef_path);
+  preview_.Start(cfg_.preview);
   XR_LOG_INFO(
       "ArmorDetector decode logit=%.3f confidence=%.3f nms=%.3f "
       "bbox_expand=%.3f "
       "max_det=%d",
       cfg_.network.logit_threshold, cfg_.network.min_confidence,
       cfg_.network.nms_threshold, cfg_.network.bbox_expand, cfg_.network.max_detections);
-  network_.Configure(resolved);
 }
 
 template <CameraTypes::FrameLayout FrameLayoutV>
@@ -539,11 +543,13 @@ void ArmorDetector<FrameLayoutV>::ProcessImage(
   metrics_msg_.preprocess_latency_ms = preprocess_latency_ms;
   metrics_msg_.infer_latency_ms = infer_timing.valid ? infer_timing.infer_ms : 0.0;
   metrics_msg_.postprocess_latency_ms = postprocess_latency_ms;
-  metrics_msg_.hailo_infer_latency_ms = infer_timing.valid ? infer_timing.infer_ms : 0.0;
-  metrics_msg_.hailo_tail_latency_ms = decode_timing.valid ? decode_timing.tail_ms : 0.0;
+  metrics_msg_.hailo_infer_latency_ms =
+      network_.UsesHailoRt() ? metrics_msg_.infer_latency_ms : 0.0;
+  metrics_msg_.hailo_tail_latency_ms =
+      network_.UsesHailoRt() && decode_timing.valid ? decode_timing.tail_ms : 0.0;
   metrics_msg_.detector_latency_ms =
-      metrics_msg_.preprocess_latency_ms + metrics_msg_.hailo_infer_latency_ms +
-      metrics_msg_.hailo_tail_latency_ms + metrics_msg_.postprocess_latency_ms;
+      metrics_msg_.preprocess_latency_ms + metrics_msg_.infer_latency_ms +
+      (decode_timing.valid ? decode_timing.tail_ms : 0.0) + metrics_msg_.postprocess_latency_ms;
   metrics_msg_.result_latency_ms =
       std::chrono::duration<double, std::milli>(result_finish - result_begin).count();
 

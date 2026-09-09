@@ -40,6 +40,13 @@ inline float decode_confidence(const ModelInferAdapter& adapter,
   return 1.0F / (1.0F + std::exp(-objectness_logit));
 }
 
+/** Preserve existing Hailo thresholds; the historical OpenVINO model gates raw logits. */
+inline float objectness_prefilter_value(ArmorDetectorModel model, float raw_value,
+                                        float confidence)
+{
+  return model == ArmorDetectorModel::OPENVINO_640X512 ? raw_value : confidence;
+}
+
 template <typename PointT>
 inline std::array<PointT, 4> canonicalize_points(
     const ModelInferAdapter& adapter,

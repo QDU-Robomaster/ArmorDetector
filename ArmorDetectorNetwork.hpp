@@ -34,6 +34,10 @@
 #include "ArmorDetectorInputView.hpp"
 #include "infer/ArmorDetectorModelAdapter.hpp"
 
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+#include "ArmorDetectorOpenVino.hpp"
+#endif
+
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
 #include <hailo/hailort.hpp>
 #include <hailo/hef.hpp>
@@ -110,6 +114,7 @@ enum class DetectorBackendKind
 {
   NONE,
   HAILORT,
+  OPENVINO,
 };
 
 /**
@@ -170,6 +175,9 @@ class ArmorDetectorNetwork
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     hailort::ConfiguredInferModel::Bindings bindings_{};
 #endif
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    std::unique_ptr<OpenVinoArmorBackend::Slot> openvino_slot_{};
+#endif
     uint64_t descriptor_generation_{0};
     uint64_t infer_index_{0};
     bool bindings_initialized_{false};
@@ -184,10 +192,50 @@ class ArmorDetectorNetwork
    * @param model 当前 detector 模型解析结果。
    * @return 后端可用且张量约定检查通过时返回 true。
    */
+  bool Configure(ArmorDetectorModel model)
+  {
+    const auto* resolved = infer::resolve_detector_model(model);
+    if (resolved == nullptr)
+    {
+      Reset();
+      XR_LOG_ERROR("ArmorDetector unknown model enum=%u; no fallback",
+                   static_cast<unsigned>(model));
+      return false;
+    }
+    return Configure(*resolved);
+  }
+
   bool Configure(const infer::ResolvedDetectorModel& model)
   {
     Reset();
     model_line_ = model.line;
+    XR_LOG_INFO("ArmorDetector selected model=%s required_backend=%s compiled=%d",
+                model.canonical_name, infer::detector_backend_name(model.backend),
+                infer::detector_backend_compiled(model.backend) ? 1 : 0);
+    if (!infer::detector_backend_compiled(model.backend))
+    {
+      XR_LOG_ERROR("ArmorDetector model=%s requires %s, but this backend was not built; no fallback",
+                   model.canonical_name, infer::detector_backend_name(model.backend));
+      return false;
+    }
+    if (model.backend == infer::DetectorBackend::OPENVINO)
+    {
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+      openvino_ = std::make_unique<OpenVinoArmorBackend>();
+      if (!openvino_->Configure(model.openvino_model_path))
+      {
+        openvino_.reset();
+        return false;
+      }
+      input_shape_ = {OpenVinoArmorBackend::input_width, OpenVinoArmorBackend::input_height};
+      backend_kind_ = DetectorBackendKind::OPENVINO;
+      backend_name_ = "OPENVINO:" + openvino_->DeviceName();
+      model_ready_ = true;
+      return true;
+#else
+      return false;
+#endif
+    }
     hailort_hef_path_ = NormalizeOptionalPath(model.hailort_hef_path);
     if (const char* env_hef = std::getenv("XR_ARMOR_HEF_PATH"); env_hef != nullptr &&
                                                             env_hef[0] != '\0')
@@ -244,6 +292,27 @@ class ArmorDetectorNetwork
   /** Allocate one raw-output slot from the configured immutable descriptors. */
   bool InitRawOutputSlot(RawOutputSlot& slot)
   {
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    // Destroy an old request before its externally bound input storage is replaced.
+    if (model_ready_)
+    {
+      slot.openvino_slot_.reset();
+    }
+    if (model_ready_ && backend_kind_ == DetectorBackendKind::OPENVINO)
+    {
+      slot = {};
+      slot.input_buffer_.resize(OpenVinoArmorBackend::input_bytes);
+      if (!openvino_->InitSlot(slot.input_buffer_.data(), slot.input_buffer_.size(),
+                               slot.openvino_slot_))
+      {
+        slot = {};
+        return false;
+      }
+      slot.descriptor_generation_ = descriptor_generation_;
+      slot.initialized_ = true;
+      return true;
+    }
+#endif
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     if (!model_ready_ || backend_kind_ != DetectorBackendKind::HAILORT)
     {
@@ -260,6 +329,14 @@ class ArmorDetectorNetwork
   bool InitRawInputView(RawOutputSlot& slot, cv::Mat& input) const
   {
     input.release();
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    if (backend_kind_ == DetectorBackendKind::OPENVINO)
+    {
+      return OpenVinoSlotMatches(slot) &&
+             BindRawRgbInputView({slot.input_buffer_.data(), slot.input_buffer_.size(),
+                                  input_shape_.width, input_shape_.height}, input);
+    }
+#endif
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     if (!model_ready_ || backend_kind_ != DetectorBackendKind::HAILORT ||
         !RawOutputSlotMatches(slot))
@@ -277,6 +354,14 @@ class ArmorDetectorNetwork
 
   [[nodiscard]] bool IsRawInputView(const RawOutputSlot& slot, const cv::Mat& input) const
   {
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    if (backend_kind_ == DetectorBackendKind::OPENVINO)
+    {
+      return OpenVinoSlotMatches(slot) && input.data == slot.input_buffer_.data() &&
+             MatchesRawRgbInputView({input.data, slot.input_buffer_.size(),
+                                     input_shape_.width, input_shape_.height}, input);
+    }
+#endif
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     return RawOutputSlotMatches(slot) &&
            input.data == slot.input_buffer_.data() &&
@@ -296,6 +381,35 @@ class ArmorDetectorNetwork
   {
     timing = {};
     slot.valid_ = false;
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    if (backend_kind_ == DetectorBackendKind::OPENVINO)
+    {
+      if (!OpenVinoSlotMatches(slot) || input.type() != CV_8UC3 ||
+          input.cols != input_shape_.width || input.rows != input_shape_.height ||
+          !input.isContinuous() || input.total() * input.elemSize() != slot.input_buffer_.size())
+      {
+        return false;
+      }
+      if (input.data != slot.input_buffer_.data())
+      {
+        std::memcpy(slot.input_buffer_.data(), input.data, slot.input_buffer_.size());
+      }
+      const auto begin = std::chrono::steady_clock::now();
+      const bool ok = openvino_->Infer(*slot.openvino_slot_);
+      const auto end = std::chrono::steady_clock::now();
+      slot.valid_ = ok;
+      if (ok)
+      {
+        timing.valid = true;
+        timing.infer_ms = std::chrono::duration<double, std::milli>(end - begin).count();
+        timing.call_begin_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            begin.time_since_epoch()).count();
+        timing.complete_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            end.time_since_epoch()).count();
+      }
+      return ok;
+    }
+#endif
     if (!model_ready_ || input.empty() ||
         backend_kind_ != DetectorBackendKind::HAILORT)
     {
@@ -347,6 +461,22 @@ class ArmorDetectorNetwork
                  HailoDecodeTimingSnapshot& timing) const
   {
     timing = {};
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    if (backend_kind_ == DetectorBackendKind::OPENVINO)
+    {
+      output.release();
+      if (!OpenVinoSlotMatches(slot) || !slot.valid_)
+      {
+        return false;
+      }
+      const auto begin = std::chrono::steady_clock::now();
+      output = OpenVinoArmorBackend::OutputView(*slot.openvino_slot_);
+      timing.valid = true;
+      timing.tail_ms = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - begin).count();
+      return true;
+    }
+#endif
     if (!model_ready_ || backend_kind_ != DetectorBackendKind::HAILORT)
     {
       return false;
@@ -390,6 +520,20 @@ class ArmorDetectorNetwork
       return false;
     }
 
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    if (backend_kind_ == DetectorBackendKind::OPENVINO)
+    {
+      if (!OpenVinoSlotMatches(compatibility_raw_output_slot_) &&
+          !InitRawOutputSlot(compatibility_raw_output_slot_))
+      {
+        return false;
+      }
+      HailoRawTimingSnapshot raw_timing{};
+      HailoDecodeTimingSnapshot decode_timing{};
+      return InferRaw(input, compatibility_raw_output_slot_, raw_timing) &&
+             DecodeRaw(compatibility_raw_output_slot_, output, decode_timing);
+    }
+#endif
     if (backend_kind_ != DetectorBackendKind::HAILORT)
     {
       XR_LOG_ERROR("ArmorDetector backend is not configured");
@@ -499,29 +643,45 @@ class ArmorDetectorNetwork
     input_shape_ = {};
     hailort_hef_path_.clear();
     last_hailo_timing_ = {};
+    ++descriptor_generation_;
+    if (descriptor_generation_ == 0U)
+    {
+      ++descriptor_generation_;
+    }
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    compatibility_raw_output_slot_.openvino_slot_.reset();
+#endif
+    compatibility_raw_output_slot_ = {};
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+    openvino_.reset();
+#endif
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
     hailo_infer_call_count_ = 0;
     hailo_dump_active_prefix_.clear();
     hailo_dumped_ = false;
     hailo_tail_call_count_ = 0;
     hailo_fuse_snapshot_count_ = 0;
-    ++descriptor_generation_;
-    if (descriptor_generation_ == 0U)
-    {
-      ++descriptor_generation_;
-    }
 
     hailo_input_name_.clear();
     hailo_input_frame_size_ = 0U;
     hailo_output_infos_.clear();
     hailo_output_descriptors_.clear();
     hailo_async_queue_size_ = 0U;
-    compatibility_raw_output_slot_ = {};
     hailo_configured_infer_model_.reset();
     hailo_infer_model_.reset();
     hailo_vdevice_.reset();
 #endif
   }
+
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+  [[nodiscard]] bool OpenVinoSlotMatches(const RawOutputSlot& slot) const
+  {
+    return model_ready_ && openvino_ && slot.initialized_ && slot.openvino_slot_ &&
+           slot.descriptor_generation_ == descriptor_generation_ &&
+           slot.openvino_slot_->owner == openvino_.get() &&
+           slot.input_buffer_.size() == OpenVinoArmorBackend::input_bytes;
+  }
+#endif
 
   static std::string NormalizeOptionalPath(const char* path)
   {
@@ -1970,6 +2130,10 @@ class ArmorDetectorNetwork
   bool model_ready_{false};
   NetworkInputShape input_shape_{};
   HailoTimingSnapshot last_hailo_timing_{};
+  uint64_t descriptor_generation_{0U};
+#if defined(ARMOR_DETECTOR_HAVE_OPENVINO)
+  std::unique_ptr<OpenVinoArmorBackend> openvino_{};
+#endif
 
 #if defined(ARMOR_DETECTOR_HAVE_HAILORT)
   std::unique_ptr<hailort::VDevice> hailo_vdevice_{};
@@ -1979,9 +2143,7 @@ class ArmorDetectorNetwork
   std::string hailo_input_name_{};
   size_t hailo_input_frame_size_{0U};
   std::vector<HailoOutputDescriptor> hailo_output_descriptors_{};
-  RawOutputSlot compatibility_raw_output_slot_{};
   std::size_t hailo_async_queue_size_{0U};
-  uint64_t descriptor_generation_{0U};
   uint32_t hailo_timing_count_{0};
   uint64_t hailo_infer_call_count_{0};
   mutable std::string hailo_dump_active_prefix_{};
@@ -1989,6 +2151,8 @@ class ArmorDetectorNetwork
   mutable uint64_t hailo_tail_call_count_{0};
   mutable uint32_t hailo_fuse_snapshot_count_{0};
 #endif
+  // Destroy requests/bindings and their buffers before either backend's device/model.
+  RawOutputSlot compatibility_raw_output_slot_{};
 };
 
 }  // namespace armor_detector_detail

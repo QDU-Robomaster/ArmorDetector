@@ -8,6 +8,7 @@ add_library(${_DEPS_TARGET} INTERFACE)
 
 find_package(OpenCV REQUIRED)
 find_package(HailoRT QUIET CONFIG)
+find_package(OpenVINO QUIET COMPONENTS Runtime)
 
 remove_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 target_compile_definitions(xr PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
@@ -24,6 +25,18 @@ else()
       "HailoRT not found; ArmorDetector will build without the HailoRT runtime backend"
   )
 endif()
+
+if(OpenVINO_FOUND)
+  target_link_libraries(${_DEPS_TARGET} INTERFACE openvino::runtime)
+  target_compile_definitions(${_DEPS_TARGET}
+                             INTERFACE ARMOR_DETECTOR_HAVE_OPENVINO=1)
+else()
+  message(STATUS "OpenVINO not found; OpenVINO models will fail explicitly at initialization")
+endif()
+
+target_compile_definitions(
+  ${_DEPS_TARGET} INTERFACE
+  ARMOR_DETECTOR_OPENVINO_640X512_PATH="${CMAKE_CURRENT_LIST_DIR}/model/armor_detector_640x512.onnx")
 
 set(ARMOR_DETECTOR_INT8_HEAD_L_HEF_FILE
     "${CMAKE_CURRENT_LIST_DIR}/model/skd_int8_head_l.hef")
