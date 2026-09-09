@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: 基于 HailoRT 的装甲板检测和 PnP 位姿估计
+module_description: 基于固定模型绑定的 HailoRT/OpenVINO 装甲板检测和 PnP 位姿估计
 constructor_args:
   cfg:
     detect_color: 1
@@ -156,7 +156,7 @@ class ArmorDetector : public LibXR::Application
   struct NetworkParams
   {
     /// 固定模型枚举：INT8_HEAD_L / INT8_GRID_L / INT16_HEAD_L / INT16_FAST_L /
-    /// INT8_HEAD / INT8_GRID / INT16_HEAD / INT16_FAST。
+    /// INT8_HEAD / INT8_GRID / INT16_HEAD / INT16_FAST / OPENVINO_640X512。
     ArmorDetectorModel model{ArmorDetectorModel::INT16_HEAD_L};
     double min_confidence{0.1};     ///< 语义过滤后的最终置信度门限。
     bool enable_quad_check{true};   ///< 是否检查网络四点凸性和面积。

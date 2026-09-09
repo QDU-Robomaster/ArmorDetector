@@ -498,7 +498,9 @@ ArmorDetector<FrameLayoutV>::DecodeModelDetectionFromFields(
           ? cfg_.network.min_confidence
           : (cfg_.network.logit_threshold > 0.0 ? cfg_.network.logit_threshold
                                                 : detail::default_logit_threshold);
-  if (objectness_value < static_cast<float>(prefilter_threshold))
+  if (infer::objectness_prefilter_value(cfg_.network.model, objectness_logit,
+                                        objectness_value) <
+      static_cast<float>(prefilter_threshold))
   {
     return std::nullopt;
   }

@@ -134,6 +134,7 @@ jobs:
           cmake -S . -B build \
             -DBUILD_TESTING=ON \
             -DOpenVINO_DIR=/opt/intel/openvino_2025.4.0/runtime/cmake \
+            -DCMAKE_REQUIRE_FIND_PACKAGE_OpenVINO=ON \
             -DLIBXR_PRINT_INTEGER_ENABLE_64BIT=ON \
             -DLIBXR_PRINT_FLOAT_ENABLE_DOUBLE=ON \
             -DLIBXR_PRINT_ENABLE_POINTER=ON
@@ -141,8 +142,29 @@ jobs:
             armor_detector_compile_test \
             armor_detector_publish_geometry_test \
             armor_detector_pipeline_test \
-            armor_detector_input_view_test
+            armor_detector_input_view_test \
+            armor_detector_backend_test
           ctest --test-dir build/libxr \
+            -R '^armor_detector_' \
+            --output-on-failure \
+            --no-tests=error
+
+      - name: Build and test without inference SDKs
+        run: |
+          cmake -S . -B build-no-sdk \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenVINO=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_HailoRT=ON \
+            -DLIBXR_PRINT_INTEGER_ENABLE_64BIT=ON \
+            -DLIBXR_PRINT_FLOAT_ENABLE_DOUBLE=ON \
+            -DLIBXR_PRINT_ENABLE_POINTER=ON
+          cmake --build build-no-sdk -j2 --target \
+            armor_detector_compile_test \
+            armor_detector_publish_geometry_test \
+            armor_detector_pipeline_test \
+            armor_detector_input_view_test \
+            armor_detector_backend_test
+          ctest --test-dir build-no-sdk/libxr \
             -R '^armor_detector_' \
             --output-on-failure \
             --no-tests=error
