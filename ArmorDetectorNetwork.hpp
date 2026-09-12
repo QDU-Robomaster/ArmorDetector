@@ -179,8 +179,8 @@ class ArmorDetectorNetwork
     std::unique_ptr<OpenVinoArmorBackend::Slot> openvino_slot_{};
 #endif
     uint64_t descriptor_generation_{0};
-    uint64_t infer_index_{0};
-    bool bindings_initialized_{false};
+    [[maybe_unused]] uint64_t infer_index_{0};
+    [[maybe_unused]] bool bindings_initialized_{false};
     bool initialized_{false};
     bool valid_{false};
 
