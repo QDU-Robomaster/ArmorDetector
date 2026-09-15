@@ -3,44 +3,15 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: 基于固定模型绑定的 HailoRT/OpenVINO 装甲板检测和 PnP 位姿估计
-constructor_args:
-  cfg:
-    detect_color: 1
-    network:
-      model: ArmorDetectorModel::INT16_HEAD_L
-      min_confidence: 0.1
-      enable_quad_check: true
-      min_quad_area_px: 16.0
-      logit_threshold: 0.619
-      nms_threshold: 0.45
-      bbox_expand: 0.1
-      max_detections: 128
-    referee_auto_detect_color: false
-    referee_domain: "host"
-    referee_topic: "sentry_ref"
-    preview:
-      enabled: false
-      preview_window_name: "armor_detector_preview"
-      preview_scale: 0.5
-      preview_wait_key_ms: 1
-      queue_capacity: 1
-      output_mode: "window"
-      web_bind_address: "0.0.0.0"
-      web_port: 8080
-      web_stream_name: "armor_detector"
-      max_fps: 30.0
-  sync: '@camera_frame_sync'
-template_args:
-  - Layout:
-      width: 1280
-      height: 720
-      step: 3840
-      encoding: CameraTypes::Encoding::BGR8
-required_hardware: []
 depends:
-  - qdu-future/CameraFrameSync
-  - qdu-future/VisionPreview
-  - xrobot-org/DurationStatistics
+- id: QDU-Robomaster/CameraFrameSync
+  ref: same-or-dev
+- id: QDU-Robomaster/VisionPreview
+  ref: same-or-dev
+- id: xrobot-org/DurationStatistics
+  ref: same-or-dev
+- id: QDU-Robomaster/CameraBase
+  ref: same-or-dev
 === END MANIFEST === */
 // clang-format on
 
@@ -85,7 +56,6 @@ depends:
 #include "CameraFrameSync.hpp"
 #include "DurationStatistics.hpp"
 #include "VisionPreview.hpp"
-#include "app_framework.hpp"
 #include "infer/ArmorDetectorModelAdapter.hpp"
 #include "libxr.hpp"
 #include "logger.hpp"
@@ -124,7 +94,7 @@ depends:
  * @tparam FrameLayoutV 编译期图像缓冲区布局和像素编码。
  */
 template <CameraTypes::FrameLayout FrameLayoutV>
-class ArmorDetector : public LibXR::Application
+class ArmorDetector
 {
  public:
   /// 同步帧来源类型。
@@ -201,13 +171,10 @@ class ArmorDetector : public LibXR::Application
 
   /**
    * @brief 构造 detector 并启动同步帧 worker。
-   * @param hw 硬件容器，当前 detector 不直接取硬件对象。
-   * @param app 应用管理器，用于注册本模块。
    * @param cfg detector 配置。
    * @param sync 图像/IMU 同步帧来源。
    */
-  ArmorDetector(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app, Config cfg,
-                Sync& sync);
+  ArmorDetector(Config cfg, Sync& sync);
 
   /**
    * @brief 更新 detector 配置并重新加载对应模型。
@@ -221,7 +188,7 @@ class ArmorDetector : public LibXR::Application
   /**
    * @brief 输出 detector 本地阶段耗时统计。
    */
-  void OnMonitor() override;
+  void OnMonitor();
 
  private:
   /**

@@ -1,5 +1,16 @@
 # ArmorDetector
 
+## Static assembly source line
+
+This source line uses explicit C++ constructor dependencies and ordered instance
+arguments. Inspect the current primary header with `xrobot_mod_parser --path .`;
+its declarations, not old manifest/config examples, define the interface.
+Historical HardwareContainer/ApplicationManager examples below apply only to the
+older dynamic source tags. Device/protocol descriptions remain relevant.
+See the XRobot [migration guide](https://github.com/xrobot-org/XRobot/blob/dev/MIGRATION.md).
+Compilation is not hardware validation; retain version-specific board evidence.
+
+
 `ArmorDetector` 从 `CameraFrameSync` 读取同步后的图像和 IMU，使用与所选模型绑定的 HailoRT 或 OpenVINO 后端检测装甲板四角点，再根据原生传感器标定求出装甲板在相机坐标系下的位姿。模块输出按值携带共享图像句柄、IMU 和检测结果；逐帧几何始终从共享图像读取。
 
 ## 数据流
