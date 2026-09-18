@@ -174,7 +174,11 @@ class ArmorDetector
    * @param cfg detector 配置。
    * @param sync 图像/IMU 同步帧来源。
    */
-  ArmorDetector(Config cfg, Sync& sync);
+  static Config DefaultConfig() { return {}; }
+
+  ArmorDetector(
+      Sync& sync,
+      Config cfg = DefaultConfig());
 
   /**
    * @brief 更新 detector 配置并重新加载对应模型。

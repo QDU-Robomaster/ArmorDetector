@@ -20,7 +20,9 @@
  * @param sync 同步帧来源。
  */
 template <CameraTypes::FrameLayout FrameLayoutV>
-ArmorDetector<FrameLayoutV>::ArmorDetector(Config cfg, Sync& sync)
+ArmorDetector<FrameLayoutV>::ArmorDetector(
+      Sync& sync,
+      Config cfg)
     : sync_(sync), pnp_solver_(sync.Calibration())
 {
   SetConfig(cfg);
