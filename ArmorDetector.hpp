@@ -164,7 +164,7 @@ class ArmorDetector
     NetworkParams network{};                  ///< 网络 detector 参数。
     bool referee_auto_detect_color{false};    ///< 是否根据裁判系统动态切换敌方颜色。
     const char* referee_domain{"host"};       ///< 裁判系统所在主题域。
-    const char* referee_topic{"sentry_ref"};  ///< 裁判系统摘要包主题名。
+    const char* referee_topic{"robot_game_ref"};  ///< 裁判系统摘要包主题名。
     VisionPreview::RuntimeParam preview{};    ///< 可选实时预览配置。
     NumberRefineParams number_refine{};       ///< 兼容旧配置；当前不生效。
   };
