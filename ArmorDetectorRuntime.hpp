@@ -12,8 +12,7 @@
 /**
  * @brief 构造 detector，加载模型并启动推理流水线。
  *
- * detector 当前不直接访问 HardwareContainer；图像和 IMU 由 CameraFrameSync
- * 输入。
+ * 图像和 IMU 由构造参数 sync（CameraFrameSync）输入。
  *
  * @tparam FrameLayoutV 编译期帧布局。
  * @param cfg detector 初始配置。
