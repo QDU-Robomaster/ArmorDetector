@@ -133,7 +133,7 @@ ArmorDetector(Sync& sync, Config cfg = DefaultConfig());  // 节选 / excerpt
 - `referee_auto_detect_color`：按裁判系统的 robot_id 切换敌方颜色，默认 `false`。robot_id 为 1 至 99（红方）时保留蓝色，为 101 至 199（蓝方）时保留红色；收到有效 robot_id 之前使用 `detect_color`。启用时，构造函数等待 Topic `referee_topic` 出现。
 - `referee_domain`：裁判系统摘要包所在的 Topic 域，默认 `"host"`。
 - `referee_topic`：裁判系统摘要包的 Topic 名，默认 `"robot_game_ref"`。
-- `preview`：`VisionPreview::RuntimeParam`，默认关闭，字段见 VisionPreview。
+- `preview`：`VisionPreview::RuntimeParam`，默认关闭，`preview_window_name` 为 `"armor_detector_preview"`，`preview_scale` 为 `0.5`，`web_stream_name` 为 `"armor_detector"`，其余字段取 VisionPreview 的默认值，字段见 VisionPreview。
 
 流水线启动后，`SetConfig()` 记录错误日志并返回。
 
@@ -159,7 +159,7 @@ Configuration parameters (`cfg`, of type `Config`; `DefaultConfig()` gives all d
 - `referee_auto_detect_color`: switches the enemy color by the referee robot_id, default `false`. A robot_id from 1 to 99 (red side) keeps blue, and from 101 to 199 (blue side) keeps red; `detect_color` applies until a valid robot_id arrives. When enabled, the constructor waits for the Topic `referee_topic` to appear.
 - `referee_domain`: the Topic domain of the referee summary packet, default `"host"`.
 - `referee_topic`: the Topic name of the referee summary packet, default `"robot_game_ref"`.
-- `preview`: `VisionPreview::RuntimeParam`, off by default; see VisionPreview for the fields.
+- `preview`: `VisionPreview::RuntimeParam`, disabled by default, `preview_window_name` is `"armor_detector_preview"`, `preview_scale` is `0.5` and `web_stream_name` is `"armor_detector"`, the other fields take the defaults of VisionPreview; see VisionPreview for the fields.
 
 After the pipeline has started, `SetConfig()` logs an error and returns.
 

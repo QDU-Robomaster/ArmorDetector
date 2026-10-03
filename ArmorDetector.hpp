@@ -188,7 +188,10 @@ class ArmorDetector
     ///< Topic domain of the referee summary packet
     const char* referee_topic{"robot_game_ref"};  ///< 裁判系统摘要包的 Topic 名
     ///< Topic name of the referee summary packet
-    VisionPreview::RuntimeParam preview{};  ///< 实时预览配置，默认关闭
+    VisionPreview::RuntimeParam preview{.preview_window_name = "armor_detector_preview",
+                                        .preview_scale = 0.5,
+                                        .web_stream_name = "armor_detector"};
+    ///< 实时预览配置，默认关闭
     ///< Live preview configuration, off by default
     NumberRefineParams number_refine{};  ///< 预留的 number refine 参数
     ///< Reserved number-refine parameters
@@ -197,6 +200,11 @@ class ArmorDetector
   /**
    * @brief 返回全部取默认值的配置。
    *        Return the configuration with all default values.
+   *
+   * 预览默认关闭，窗口名为 `armor_detector_preview`，缩放为 0.5，Web 流名为
+   * `armor_detector`。
+   * The preview is disabled by default, with window name `armor_detector_preview`,
+   * scale 0.5 and web stream name `armor_detector`.
    *
    * @return 默认配置。
    *         Default configuration.
