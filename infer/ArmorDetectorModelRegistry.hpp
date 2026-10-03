@@ -17,17 +17,31 @@
 #define ARMOR_DETECTOR_OPENVINO_640X512_PATH ""
 #endif
 
+/**
+ * @brief 检测模型枚举，每个值绑定模型文件、输出语义和所需后端。
+ *        Detection model enum; each value binds the model file, the output semantics and
+ *        the required backend.
+ */
 enum class ArmorDetectorModel : uint8_t
 {
-  INT8_HEAD_L = 0,
-  INT8_GRID_L = 1,
-  INT16_HEAD_L = 2,
-  INT8_HEAD = 3,
-  INT8_GRID = 4,
-  INT16_HEAD = 5,
-  INT16_FAST_L = 6,
-  INT16_FAST = 7,
-  OPENVINO_640X512 = 8,
+  INT8_HEAD_L = 0,  ///< HailoRT，`int8` 六输出 host-tail
+  ///< HailoRT, `int8` six-output host-tail
+  INT8_GRID_L = 1,  ///< HailoRT，`int8` 单输出 `21x6720`
+  ///< HailoRT, `int8` single-output `21x6720`
+  INT16_HEAD_L = 2,  ///< HailoRT，`int16` 三头 `conv47/54/60`，默认模型
+  ///< HailoRT, `int16` three-head `conv47/54/60`, the default model
+  INT8_HEAD = 3,  ///< HailoRT，`int8` 六输出 host-tail
+  ///< HailoRT, `int8` six-output host-tail
+  INT8_GRID = 4,  ///< HailoRT，`int8` 单输出 `21x6720`
+  ///< HailoRT, `int8` single-output `21x6720`
+  INT16_HEAD = 5,  ///< HailoRT，`int16` 三头 `conv47/54/60`
+  ///< HailoRT, `int16` three-head `conv47/54/60`
+  INT16_FAST_L = 6,  ///< HailoRT，`int16` 三头 `conv47/54/60`，fast 版本
+  ///< HailoRT, `int16` three-head `conv47/54/60`, fast version
+  INT16_FAST = 7,  ///< HailoRT，`int16` 三头 `conv47/54/60`，fast 版本
+  ///< HailoRT, `int16` three-head `conv47/54/60`, fast version
+  OPENVINO_640X512 = 8,  ///< OpenVINO，`640x512` ONNX 模型
+  ///< OpenVINO, `640x512` ONNX model
 };
 
 namespace armor_detector_infer
