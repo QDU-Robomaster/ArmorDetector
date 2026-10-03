@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: 基于固定模型绑定的 HailoRT/OpenVINO 装甲板检测和 PnP 位姿估计
+module_description: 装甲板检测模块：HailoRT / OpenVINO 模型推理与 PnP 位姿估计 / Armor detection Module with HailoRT or OpenVINO model inference and PnP pose estimation
 depends:
 - id: QDU-Robomaster/CameraFrameSync
   ref: same-or-dev
@@ -142,10 +142,7 @@ class ArmorDetector
   };
 
   /**
-   * @brief 兼容旧配置的 refine 参数占位。
-   *
-   * 当前 detector 已不再执行 number refine；保留该结构仅用于兼容旧 YAML 和
-   * 已生成配置，运行时会忽略这些字段。
+   * @brief 预留的 number refine 参数，运行时不读取这些字段。
    */
   struct NumberRefineParams
   {
@@ -166,7 +163,7 @@ class ArmorDetector
     const char* referee_domain{"host"};       ///< 裁判系统所在主题域。
     const char* referee_topic{"robot_game_ref"};  ///< 裁判系统摘要包主题名。
     VisionPreview::RuntimeParam preview{};    ///< 可选实时预览配置。
-    NumberRefineParams number_refine{};       ///< 兼容旧配置；当前不生效。
+    NumberRefineParams number_refine{};       ///< 预留的 number refine 参数，运行时不读取。
   };
 
   /**

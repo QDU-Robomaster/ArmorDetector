@@ -63,7 +63,7 @@ enum class ArmorPriority : uint8_t
   SECOND = 2,      ///< 第二优先级。
   THIRD = 3,       ///< 第三优先级。
   FOURTH = 4,      ///< 第四优先级。
-  FORTH = FOURTH,  ///< 拼写兼容别名。
+  FORTH = FOURTH,  ///< FOURTH 的别名。
   FIFTH = 5,       ///< 最低优先级或默认兜底。
 };
 

@@ -72,7 +72,7 @@ ArmorDetector<FrameLayoutV>::Detect(const cv::Mat& raw_img)
   return armors;
 }
 
-/** Decode a caller-owned raw Hailo slot and run the existing detector postprocess. */
+/** Decode a caller-owned raw Hailo slot and run the detector postprocess. */
 template <CameraTypes::FrameLayout FrameLayoutV>
 std::vector<typename ArmorDetector<FrameLayoutV>::CandidateArmor>
 ArmorDetector<FrameLayoutV>::DecodePipelineOutput(
