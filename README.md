@@ -197,9 +197,9 @@ Fields of `ArmorDetectorResult`:
 
 ## 6. 配置示例 / Configuration Example
 
-`xrobot instance add QDU-Robomaster/ArmorDetector` 在模板参数填写后写入实例，`sync` 填写为 CameraFrameSync 实例的 id，`cfg` 按下例展开为 YAML 映射。`FrameLayout` 是常量，须与相机输出的帧布局一致：
+`xrobot instance add QDU-Robomaster/ArmorDetector` 在模板参数填写后写入实例，`sync` 填写为 CameraFrameSync 实例的 id，`cfg` 为 `DefaultConfig()` 表达式，`Config` 的默认值见第 4 节。`FrameLayout` 是常量，须与相机输出的帧布局一致：
 
-An instance written by `xrobot instance add QDU-Robomaster/ArmorDetector` once the template argument is filled in; `sync` is set to the id of a CameraFrameSync instance, and `cfg` is expanded into a YAML mapping as below. `FrameLayout` is a constant and has to match the frame layout of the camera output:
+An instance written by `xrobot instance add QDU-Robomaster/ArmorDetector` once the template argument is filled in; `sync` is set to the id of a CameraFrameSync instance, and `cfg` is the `DefaultConfig()` expression, with the defaults of `Config` listed in section 4. `FrameLayout` is a constant and has to match the frame layout of the camera output:
 
 ```yaml
 constexpr_includes:
@@ -215,36 +215,12 @@ modules:
       - ProjectConstexpr::FrameLayout
     args:
       - sync: camera_frame_sync
-      - cfg:
-          detect_color: 2
-          network:
-            model: ArmorDetectorModel::INT16_HEAD_L
-            min_confidence: 0.1
-            enable_quad_check: true
-            min_quad_area_px: 16.0
-            logit_threshold: 0.619
-            nms_threshold: 0.45
-            bbox_expand: 0.1
-            max_detections: 128
-          referee_auto_detect_color: true
-          referee_domain: "host"
-          referee_topic: "robot_game_ref"
-          preview:
-            enabled: false
-            preview_window_name: "armor_detector_preview"
-            preview_scale: 0.5
-            preview_wait_key_ms: 1
-            queue_capacity: 1
-            output_mode: "window"
-            web_bind_address: "0.0.0.0"
-            web_port: 8080
-            web_stream_name: "armor_detector"
-            max_fps: 30.0
+      - cfg: ArmorDetector<ProjectConstexpr::FrameLayout>::DefaultConfig()
 ```
 
-`camera_frame_sync` 是 `QDU-Robomaster/CameraFrameSync` 实例的 id，列在本实例之前，两个实例的 `template_args` 相同。`referee_auto_detect_color` 为 `true` 时，Topic `robot_game_ref` 由其他实例（例如 SharedTopic）提供。Webots 仿真使用 `network.model: ArmorDetectorModel::OPENVINO_640X512`，`referee_auto_detect_color: false`，并设置 `preview.enabled: true` 与 `preview.output_mode: "web"`。
+`camera_frame_sync` 是 `QDU-Robomaster/CameraFrameSync` 实例的 id，列在本实例之前，两个实例的 `template_args` 相同。`referee_auto_detect_color` 为 `true` 时，Topic `robot_game_ref` 由其他实例（例如 SharedTopic）提供。
 
-`camera_frame_sync` is the id of a `QDU-Robomaster/CameraFrameSync` instance, listed before this instance, and both instances share the same `template_args`. With `referee_auto_detect_color` set to `true`, the Topic `robot_game_ref` is provided by another instance (for example SharedTopic). Webots simulation uses `network.model: ArmorDetectorModel::OPENVINO_640X512`, `referee_auto_detect_color: false`, `preview.enabled: true` and `preview.output_mode: "web"`.
+`camera_frame_sync` is the id of a `QDU-Robomaster/CameraFrameSync` instance, listed before this instance, and both instances share the same `template_args`. With `referee_auto_detect_color` set to `true`, the Topic `robot_game_ref` is provided by another instance (for example SharedTopic).
 
 ## 7. 依赖与硬件 / Dependencies and Hardware
 
