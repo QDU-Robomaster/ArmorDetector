@@ -5,21 +5,15 @@ on:
   workflow_dispatch:
 jobs:
   build:
-    uses: xrobot-org/XRobot/.github/workflows/module-ci.yml@dev
+    uses: xrobot-org/XRobot/.github/workflows/module-ci.yml@v1
     with:
-      xrobot-ref: dev
-      libxr-ref: dev
-      dependency-ref: refs/heads/dev
       template-args: '["CameraTypes::FrameLayout{.width=640,.height=480,.step=1920,.encoding=CameraTypes::Encoding::BGR8}"]'
       image: 'ghcr.io/xrobot-org/docker-image-webots:main'
       cmake-options: '-DOpenVINO_DIR=/opt/intel/openvino_2025.4.0/runtime/cmake -DCMAKE_REQUIRE_FIND_PACKAGE_OpenVINO=ON -DWEBOTS_HOME=/usr/local/webots'
       ctest-regex: '^armor_detector_'
   build-without-inference-sdks:
-    uses: xrobot-org/XRobot/.github/workflows/module-ci.yml@dev
+    uses: xrobot-org/XRobot/.github/workflows/module-ci.yml@v1
     with:
-      xrobot-ref: dev
-      libxr-ref: dev
-      dependency-ref: refs/heads/dev
       template-args: '["CameraTypes::FrameLayout{.width=640,.height=480,.step=1920,.encoding=CameraTypes::Encoding::BGR8}"]'
       image: 'ghcr.io/xrobot-org/docker-image-webots:main'
       cmake-options: '-DCMAKE_DISABLE_FIND_PACKAGE_OpenVINO=ON -DCMAKE_DISABLE_FIND_PACKAGE_HailoRT=ON'
