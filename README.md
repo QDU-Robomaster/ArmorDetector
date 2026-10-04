@@ -30,7 +30,7 @@ When `cfg.preview.enabled` is `true`, VisionPreview starts and overlays the dete
 
 ## 2. 模型与推理 / Models and Inference
 
-`network.model` 绑定模型文件、输出语义和所需后端。当前提供 8 个 HailoRT 模型和 1 个 OpenVINO 模型，默认 `INT16_HEAD_L`。所选模型需要的后端未构建时，初始化记录错误日志并结束，流水线保持未启动。
+`network.model` 绑定模型文件、输出语义和所需后端。提供 8 个 HailoRT 模型和 1 个 OpenVINO 模型，默认 `INT16_HEAD_L`。所选模型需要的后端未构建时，初始化记录错误日志并结束，流水线保持未启动。
 
 | 枚举 `ArmorDetectorModel::` | 值 | 后端 | 文件 |
 | --- | --- | --- | --- |
@@ -197,11 +197,12 @@ Fields of `ArmorDetectorResult`:
 
 ## 6. 配置示例 / Configuration Example
 
-`xrobot instance add QDU-Robomaster/ArmorDetector` 在模板参数填写后写入实例，`sync` 填写为 CameraFrameSync 实例的 id，`cfg` 为 `DefaultConfig()` 表达式，`Config` 的默认值见第 4 节。`FrameLayout` 是常量，须与相机输出的帧布局一致：
+`xrobot instance add QDU-Robomaster/ArmorDetector --template-arg <FrameLayout>` 写入的实例，`sync` 填写为 CameraFrameSync 实例的 id，`cfg` 为 `DefaultConfig()` 表达式，`Config` 的默认值见第 4 节。`FrameLayout` 是常量，须与相机输出的帧布局一致：
 
-An instance written by `xrobot instance add QDU-Robomaster/ArmorDetector` once the template argument is filled in; `sync` is set to the id of a CameraFrameSync instance, and `cfg` is the `DefaultConfig()` expression, with the defaults of `Config` listed in section 4. `FrameLayout` is a constant and has to match the frame layout of the camera output:
+An instance written by `xrobot instance add QDU-Robomaster/ArmorDetector --template-arg <FrameLayout>`; `sync` is set to the id of a CameraFrameSync instance, and `cfg` is the `DefaultConfig()` expression, with the defaults of `Config` listed in section 4. `FrameLayout` is a constant and has to match the frame layout of the camera output:
 
 ```yaml
+constexpr_namespace: AutoAimRunConfig
 constexpr_includes:
   - CameraBase.hpp
 constexprs:
@@ -212,10 +213,10 @@ modules:
   - module: QDU-Robomaster/ArmorDetector
     id: armor_detector
     template_args:
-      - ProjectConstexpr::FrameLayout
+      - AutoAimRunConfig::FrameLayout
     args:
       - sync: camera_frame_sync
-      - cfg: ArmorDetector<ProjectConstexpr::FrameLayout>::DefaultConfig()
+      - cfg: ArmorDetector<AutoAimRunConfig::FrameLayout>::DefaultConfig()
 ```
 
 `camera_frame_sync` 是 `QDU-Robomaster/CameraFrameSync` 实例的 id，列在本实例之前，两个实例的 `template_args` 相同。`referee_auto_detect_color` 为 `true` 时，Topic `robot_game_ref` 由其他实例（例如 SharedTopic）提供。
