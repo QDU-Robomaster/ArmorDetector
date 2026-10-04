@@ -17,7 +17,7 @@
 namespace armor_detector_detail
 {
 
-/** The May 2026 NUC model already contains its RGB-u8 HWC preprocessing. */
+/** OpenVINO backend; the model contains its RGB-u8 HWC preprocessing. */
 class OpenVinoArmorBackend
 {
  public:
@@ -84,7 +84,7 @@ class OpenVinoArmorBackend
     }
   }
 
-  /** Historical device priority; compilation failure never retries another device. */
+  /** Use the requested device, otherwise the first of NPU, GPU, CPU among the devices. */
   static std::string SelectDevice(const std::vector<std::string>& devices,
                                   const char* requested)
   {

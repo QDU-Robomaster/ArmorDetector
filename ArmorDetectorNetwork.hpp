@@ -456,7 +456,7 @@ class ArmorDetectorNetwork
 #endif
   }
 
-  /** Fuse/dequantize a completed raw slot into the legacy CV_32F output matrix. */
+  /** Fuse/dequantize a completed raw slot into the CV_32F output matrix. */
   bool DecodeRaw(const RawOutputSlot& slot, cv::Mat& output,
                  HailoDecodeTimingSnapshot& timing) const
   {

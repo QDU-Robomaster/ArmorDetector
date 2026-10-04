@@ -2,6 +2,8 @@
 
 #include <chrono>
 
+#include "libxr_def.hpp"
+
 /**
  * @file ArmorDetectorRuntime.hpp
  * @brief ArmorDetector 配置、同步帧回调和帧级运行时实现。
@@ -10,18 +12,14 @@
 /**
  * @brief 构造 detector，加载模型并启动推理流水线。
  *
- * detector 当前不直接访问 HardwareContainer；图像和 IMU 由 CameraFrameSync
- * 输入。
+ * 图像和 IMU 由构造参数 sync（CameraFrameSync）输入。
  *
  * @tparam FrameLayoutV 编译期帧布局。
- * @param app 应用管理器，用于注册本模块。
  * @param cfg detector 初始配置。
  * @param sync 同步帧来源。
  */
 template <CameraTypes::FrameLayout FrameLayoutV>
-ArmorDetector<FrameLayoutV>::ArmorDetector(LibXR::HardwareContainer&,
-                                           LibXR::ApplicationManager& app, Config cfg,
-                                           Sync& sync)
+ArmorDetector<FrameLayoutV>::ArmorDetector(Sync& sync, Config cfg)
     : sync_(sync), pnp_solver_(sync.Calibration())
 {
   SetConfig(cfg);
@@ -116,8 +114,6 @@ ArmorDetector<FrameLayoutV>::ArmorDetector(LibXR::HardwareContainer&,
       LibXR::Topic::FindOrCreate<SyncedFrameTopicPayload>(sync_.SyncedFrameTopicName()));
   synced_frame_callback_ = LibXR::Topic::Callback::Create(OnSyncedFrameStatic, this);
   synced_frame_topic_.RegisterCallback(synced_frame_callback_);
-
-  app.Register(*this);
 }
 
 /**
@@ -513,10 +509,10 @@ void ArmorDetector<FrameLayoutV>::ProcessImage(
     auto result_measurement = result_duration_.Measure();
     FillResultMessage(armors, bgr_img, image_frame->geometry, detected_frame_.detections);
     detected_frame_.detections.erase(
-        std::remove_if(
-            detected_frame_.detections.begin(), detected_frame_.detections.end(),
-            [](const ArmorDetectorResult& armor)
-            { return armor.number == ArmorNumber::OUTPOST; }),
+        std::remove_if(detected_frame_.detections.begin(),
+                       detected_frame_.detections.end(),
+                       [](const ArmorDetectorResult& armor)
+                       { return armor.number == ArmorNumber::OUTPOST; }),
         detected_frame_.detections.end());
   }
   const auto result_finish = std::chrono::steady_clock::now();
@@ -547,9 +543,10 @@ void ArmorDetector<FrameLayoutV>::ProcessImage(
       network_.UsesHailoRt() ? metrics_msg_.infer_latency_ms : 0.0;
   metrics_msg_.hailo_tail_latency_ms =
       network_.UsesHailoRt() && decode_timing.valid ? decode_timing.tail_ms : 0.0;
-  metrics_msg_.detector_latency_ms =
-      metrics_msg_.preprocess_latency_ms + metrics_msg_.infer_latency_ms +
-      (decode_timing.valid ? decode_timing.tail_ms : 0.0) + metrics_msg_.postprocess_latency_ms;
+  metrics_msg_.detector_latency_ms = metrics_msg_.preprocess_latency_ms +
+                                     metrics_msg_.infer_latency_ms +
+                                     (decode_timing.valid ? decode_timing.tail_ms : 0.0) +
+                                     metrics_msg_.postprocess_latency_ms;
   metrics_msg_.result_latency_ms =
       std::chrono::duration<double, std::milli>(result_finish - result_begin).count();
 
@@ -1216,8 +1213,7 @@ void ArmorDetector<FrameLayoutV>::ReleaseInferSlotLocked(
 }
 
 template <CameraTypes::FrameLayout FrameLayoutV>
-void ArmorDetector<FrameLayoutV>::ReleasePostSlot(
-    armor_detector_pipeline::WorkItem item)
+void ArmorDetector<FrameLayoutV>::ReleasePostSlot(armor_detector_pipeline::WorkItem item)
 {
   std::lock_guard<std::mutex> lock(pipeline_mutex_);
   ReleasePostSlotLocked(item);
