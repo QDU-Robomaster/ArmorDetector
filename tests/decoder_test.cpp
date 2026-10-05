@@ -70,8 +70,13 @@ void TestDecode()
   const float small[8] = {-0.25F, -0.125F, -0.25F, 0.125F, 0.25F, 0.125F, 0.25F, -0.125F};
   p4.Cell(20, 30, 0.0F, 0, 0, small);  // C：蓝、小，得分 0.5 / blue, small
   p4.Cell(5, 5, -0.5F, 0, 0, small);   // D：0.378 < 0.4，不出现 / below the threshold
+  // E：中心在 (167.5, 87.5) 的大框，与 A 的框 IoU 0.06 逃过 NMS，但包含 A 的中心，按中心
+  // 包含去掉 / A large box around A: box IoU 0.06 passes NMS, but it contains A's
+  // centre and is dropped by centre containment.
+  const float large[8] = {-1.0F, -0.5F, -1.0F, 0.5F, 1.0F, 0.5F, 1.0F, -0.5F};
+  p4.Cell(5, 10, 1.5F, 1, 1, large);
   const auto dets = ArmorV4::Decode({p3.View(), p4.View()}, 0.4F, 0.3F);
-  Expect(dets.size() == 2, "A and C survive");
+  Expect(dets.size() == 2, "A and C survive; B by NMS, E by centre containment");
   const ArmorV4::Detection& a = dets[0];
   Expect(Near(a.score, 1.0F / (1.0F + std::exp(-2.0F))), "sigmoid score");
   Expect(a.color == 1 && a.size == 1, "argmax colour and size");

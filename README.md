@@ -38,12 +38,12 @@ synced 回调 → 一格信箱（满则丢新帧，不阻塞上游）
 ```
 
 - 解码：两个尺度（stride 8、16）合在一起，`sigmoid(obj) > min_confidence` 的格子取颜色、大小的 argmax，角点为 `偏移 × 4 × stride + 格心`，格心 `((j + 0.5)·stride − 0.5, (i + 0.5)·stride − 0.5)`；角点不做多格加权。
-- NMS：四个角点的外接框，`cv::dnn::NMSBoxes`，阈值 `nms_iou`，最多 50 个。
+- NMS：四个角点的外接框，`cv::dnn::NMSBoxes`，阈值 `nms_iou`，最多 50 个；之后按分数做中心包含去重：一个检测的中心落在已保留检测的四边形里，或它的四边形包含已保留检测的中心，就视为同一块板的重复框丢弃。
 - 编号：灰度图（`COLOR_BayerBG2GRAY`）按四个角点矫正成 36×40，减均值、除以（标准差 + 4），9 类取 argmax；`negative` 的检测丢弃。
 - 角点顺序为左上、左下、右下、右上（灯条四端点），按帧几何换算到原生像素。
 
 - Decoding: both scales (stride 8 and 16) together; cells with `sigmoid(obj) > min_confidence` take the argmax of colour and size, corners are `offset × 4 × stride + cell centre` with the centre at `((j + 0.5)·stride − 0.5, (i + 0.5)·stride − 0.5)`; corners are not averaged over cells.
-- NMS: the corners' bounding boxes, `cv::dnn::NMSBoxes`, threshold `nms_iou`, at most 50.
+- NMS: the corners' bounding boxes, `cv::dnn::NMSBoxes`, threshold `nms_iou`, at most 50; then centre-containment suppression in score order: a detection whose centre lies in a kept quad, or whose quad contains a kept centre, is a duplicate on the same plate and is dropped.
 - Number: the grey image (`COLOR_BayerBG2GRAY`) is rectified to 36×40 by the four corners, mean-subtracted and divided by (standard deviation + 4); argmax over 9 classes; `negative` detections are dropped.
 - Corners are ordered top-left, bottom-left, bottom-right, top-right (light-bar ends) and converted to native pixels with the frame geometry.
 
@@ -99,10 +99,10 @@ The sentry uses `detector_model: "armor_det_v4.onnx"`, `openvino_device: "NPU"` 
 
 ## 7. 测试 / Tests
 
-- `tests/decoder_test.cpp`：用构造的张量检查解码（门限、格心、两个尺度、NMS、量化 HWC 视图），SHA-256 标准向量，编号分类器的输入小图。不需要模型文件。
+- `tests/decoder_test.cpp`：用构造的张量检查解码（门限、格心、两个尺度、NMS、中心包含去重、量化 HWC 视图），SHA-256 标准向量，编号分类器的输入小图。不需要模型文件。
 - `tests/model_test.cpp`：设置 `ARMOR_MODELS_DIR`（模型文件）与 `ARMOR_DETECTOR_GOLDEN_DIR`（Python 参考生成的帧与 `gold.txt`）后运行，否则跳过。与 Python 参考（ONNX Runtime + `rm_model.decode` + num-v1）逐项对比，再把整条模块跑一遍。
 
-- `tests/decoder_test.cpp`: decoding on constructed tensors (threshold, cell centres, both scales, NMS, the quantised HWC view), SHA-256 test vectors and the number classifier's patch. No model files needed.
+- `tests/decoder_test.cpp`: decoding on constructed tensors (threshold, cell centres, both scales, NMS, centre containment, the quantised HWC view), SHA-256 test vectors and the number classifier's patch. No model files needed.
 - `tests/model_test.cpp`: runs when `ARMOR_MODELS_DIR` (model files) and `ARMOR_DETECTOR_GOLDEN_DIR` (frames and `gold.txt` from the Python reference) are set, and is skipped otherwise. It compares item by item with the Python reference (ONNX Runtime + `rm_model.decode` + num-v1) and then runs the whole Module.
 
 ## 8. 依赖 / Dependencies
