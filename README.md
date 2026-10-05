@@ -1,254 +1,112 @@
 # ArmorDetector
 
-装甲板检测模块：HailoRT / OpenVINO 模型推理与 PnP 位姿估计 / Armor detection Module with HailoRT or OpenVINO model inference and PnP pose estimation
+装甲板检测：v4 模型直接吃原始 Bayer，解码、NMS、编号分类、颜色过滤，发布检测帧 / Armor detection: the v4 model takes raw Bayer; decode, NMS, number classification and colour filtering, then publish detected frames
 
 ## 1. 模块作用 / Purpose
 
-构造时，ArmorDetector 加载 `cfg.network.model` 指定的模型，创建推理线程 `armor-infer` 与输出线程 `armor-output`（线程名在 Linux 下设置），并订阅 CameraFrameSync 发布的同步帧。输入图像可以是 BGR8、RGB8、BGRA8、RGBA8 或 MONO8，统一转换为 BGR 后拉伸到 `640x512`，预处理到推理槽的输入缓冲区。模型输出四角点、颜色和编号，经过 NMS、颜色与编号过滤、尺寸类型判定后，使用原生传感器标定做 PnP，得到装甲板在相机坐标系下的位姿，最后发布到 Topic `armors_frame`。
+ArmorDetector 订阅 `<相机名>_synced`，把 640×512 原始 BayerRG8 帧直接送入 v4 检测模型，得到每块装甲板的颜色、大小、置信度和四个角点，再用 num-v1 分类器给出编号，过滤掉不是对方颜色和不是装甲板的检测，把角点换算到原生像素后发布 `DetectedFrame{synced, armors}` 到 `<相机名>_detected`。收进的每一帧都发布一次，没有装甲板时 `armors` 为空。
 
-处理流水线由三个 `InferSlot` 和两个 `PostSlot` 组成：
+ArmorDetector subscribes to `<camera>_synced`, feeds the 640×512 raw BayerRG8 frame straight into the v4 detector, which gives each armor's colour, size, confidence and four corners, classifies its number with num-v1, drops detections that are not the opponent's colour or not an armor, converts the corners to native pixels and publishes `DetectedFrame{synced, armors}` on `<camera>_detected`. Every accepted frame is published once; `armors` is empty when nothing is found.
 
-1. 同步帧回调在有空闲 `InferSlot` 时复制共享图像所有权并完成预处理；三个 `InferSlot` 均被占用时丢弃新到的帧。
-2. 推理线程提交推理。HailoRT 模型异步推理，最多同时提交两个请求，第三个 `InferSlot` 保存下一帧已预处理的输入，完成结果按提交顺序交给输出线程。OpenVINO 模型同步推理，每个槽持有独立的请求和输出 tensor。
-3. 输出线程等待一个空闲的 `PostSlot`，把后端输出整理为 `CV_32F` 矩阵，移交同步帧与逐帧上下文后释放 `InferSlot`，并在同一线程内完成解码、NMS、过滤、PnP 和发布。
+## 2. 模型 / Models
 
-`cfg.preview.enabled` 为 `true` 时启动 VisionPreview，在当前帧上叠加检测结果：`output_mode` 为 `window` 时使用 OpenCV 窗口，为 `raw`、`web`、`http` 或 `bmp` 时使用 BMP 网页推流，取流路径为 `/stream/<web_stream_name>`。默认关闭预览。
+模型来自私有仓库 QDU-Robomaster/armor-models 的 Release，不进入本仓库。部署时把该仓库克隆到 BSP 根目录，用其中的脚本下载：
 
-`OnMonitor()` 输出预处理、推理线程、后处理和结果填充四个阶段的耗时统计（次数、平均值、最小值、最大值，单位 μs）。
+The models come from the Releases of the private repository QDU-Robomaster/armor-models and never enter this repository. For deployment that repository is cloned into the BSP root and its script downloads them:
 
-Upon construction, ArmorDetector loads the model given by `cfg.network.model`, creates the inference thread `armor-infer` and the output thread `armor-output` (the thread names are set on Linux), and subscribes to the synchronized frames published by CameraFrameSync. Input images in BGR8, RGB8, BGRA8, RGBA8 or MONO8 are converted to BGR, stretched to `640x512` and preprocessed into the input buffer of an inference slot. The model outputs four corner points, color and number; after NMS, color and number filtering and size-type classification, PnP with the native sensor calibration gives the armor pose in the camera frame, which is published on the Topic `armors_frame`.
-
-The processing pipeline consists of three `InferSlot`s and two `PostSlot`s:
-
-1. The synchronized-frame callback copies the shared image ownership and preprocesses the frame when an `InferSlot` is free; a frame arriving while all three `InferSlot`s are occupied is dropped.
-2. The inference thread submits the inference. HailoRT models run asynchronously with at most two requests in flight, the third `InferSlot` holds the preprocessed input of the next frame, and completions are handed to the output thread in submission order. OpenVINO models run synchronously, and each slot owns its request and output tensor.
-3. The output thread waits for a free `PostSlot`, arranges the backend output into a `CV_32F` matrix, moves the synchronized frame and the per-frame context over, releases the `InferSlot`, and then decodes, runs NMS, filters, solves PnP and publishes on the same thread.
-
-When `cfg.preview.enabled` is `true`, VisionPreview starts and overlays the detection results on the current frame: `output_mode` `window` uses an OpenCV window, and `raw`, `web`, `http` or `bmp` use a BMP web stream at `/stream/<web_stream_name>`. Preview is off by default.
-
-`OnMonitor()` logs duration statistics (count, average, minimum, maximum, in μs) for the preprocess, inference thread, postprocess and result stages.
-
-## 2. 模型与推理 / Models and Inference
-
-`network.model` 绑定模型文件、输出语义和所需后端。提供 8 个 HailoRT 模型和 1 个 OpenVINO 模型，默认 `INT16_HEAD_L`。所选模型需要的后端未构建时，初始化记录错误日志并结束，流水线保持未启动。
-
-| 枚举 `ArmorDetectorModel::` | 值 | 后端 | 文件 |
-| --- | --- | --- | --- |
-| `INT8_HEAD_L` | 0 | HailoRT | `model/skd_int8_head_l.hef` |
-| `INT8_GRID_L` | 1 | HailoRT | `model/skd_int8_grid_l.hef` |
-| `INT16_HEAD_L` | 2 | HailoRT | `model/szu_int16_head_l.hef` |
-| `INT8_HEAD` | 3 | HailoRT | `model/skd_int8_head.hef` |
-| `INT8_GRID` | 4 | HailoRT | `model/skd_int8_grid.hef` |
-| `INT16_HEAD` | 5 | HailoRT | `model/szu_int16_head.hef` |
-| `INT16_FAST_L` | 6 | HailoRT | `model/int16_fast_l.hef` |
-| `INT16_FAST` | 7 | HailoRT | `model/int16_fast.hef` |
-| `OPENVINO_640X512` | 8 | OpenVINO | `model/armor_detector_640x512.onnx` |
-
-模型输出语义由 `infer/` 目录下的适配器描述：
-
-- `INT8_HEAD*`：`int8` 六输出 host-tail 语义。
-- `INT8_GRID*`：`int8` 单输出 `21x6720` 语义。
-- `INT16_HEAD*`：`int16` 三头 `conv47/54/60` 语义（日志中的模型名为 `int16-quality*`）。
-- `INT16_FAST*`：`int16` 三头 `conv47/54/60` 语义，fast 版本。
-
-环境变量 `XR_ARMOR_HEF_PATH` 指定 HailoRT 模型的 HEF 路径，覆盖上表中的默认文件。
-
-`OPENVINO_640X512` 使用 `model/armor_detector_640x512.onnx`，模型直接接受 RGB `uint8 [512,640,3]` 输入，模块把图像拉伸到 `640x512` 并由 BGR 转为 RGB 后送入。输出为 `float32 [1,20160,22]`，颜色、编号和 `[0,3,2,1]` 角点顺序与 `INT16_*` 模型使用同一解码适配器，置信度为 sigmoid 后的值。`network.logit_threshold` 与原始 objectness logit 比较。
-
-OpenVINO 在枚举到的设备中按 NPU、GPU、CPU 的顺序选择；环境变量 `XR_ARMOR_OPENVINO_DEVICE`（例如 `CPU`）指定设备。指定的设备或模型初始化失败时，记录错误日志并结束初始化。
-
-HailoRT 默认异步推理，OpenVINO 使用同步推理。环境变量 `ARMOR_DETECTOR_INFERENCE_MODE` 取 `sync` 时 HailoRT 也同步推理；取 `async` 仅适用于 HailoRT，取 `sync` 与 `async` 以外的值或对 OpenVINO 取 `async` 时，记录错误日志，流水线保持未启动。环境变量 `ARMOR_DETECTOR_INFERENCE_CPU=<n>` 把推理线程绑定到 CPU `n`（Linux）。
-
-调试用环境变量：`ARMOR_DETECTOR_DUMP_TSV` 指定输出文件，导出最终结果 TSV；`ARMOR_DETECTOR_DUMP_OUTPUT_F32` 与 `ARMOR_DETECTOR_DUMP_OUTPUT_FRAME_INDEX` 导出指定帧的网络输出矩阵。
-
-`network.model` selects the model file, the output semantics and the required backend. There are 8 HailoRT models and 1 OpenVINO model, with `INT16_HEAD_L` as the default. When the backend required by the selected model is not built, initialization logs an error and ends, and the pipeline stays stopped.
-
-| Enum `ArmorDetectorModel::` | Value | Backend | File |
-| --- | --- | --- | --- |
-| `INT8_HEAD_L` | 0 | HailoRT | `model/skd_int8_head_l.hef` |
-| `INT8_GRID_L` | 1 | HailoRT | `model/skd_int8_grid_l.hef` |
-| `INT16_HEAD_L` | 2 | HailoRT | `model/szu_int16_head_l.hef` |
-| `INT8_HEAD` | 3 | HailoRT | `model/skd_int8_head.hef` |
-| `INT8_GRID` | 4 | HailoRT | `model/skd_int8_grid.hef` |
-| `INT16_HEAD` | 5 | HailoRT | `model/szu_int16_head.hef` |
-| `INT16_FAST_L` | 6 | HailoRT | `model/int16_fast_l.hef` |
-| `INT16_FAST` | 7 | HailoRT | `model/int16_fast.hef` |
-| `OPENVINO_640X512` | 8 | OpenVINO | `model/armor_detector_640x512.onnx` |
-
-The output semantics of the models are described by the adapters in the `infer/` directory:
-
-- `INT8_HEAD*`: `int8` six-output host-tail semantics.
-- `INT8_GRID*`: `int8` single-output `21x6720` semantics.
-- `INT16_HEAD*`: `int16` three-head `conv47/54/60` semantics (the model name in the logs is `int16-quality*`).
-- `INT16_FAST*`: `int16` three-head `conv47/54/60` semantics, fast version.
-
-The environment variable `XR_ARMOR_HEF_PATH` sets the HEF path of the HailoRT models and overrides the default files in the table.
-
-`OPENVINO_640X512` uses `model/armor_detector_640x512.onnx`. The model takes RGB `uint8 [512,640,3]` directly; the Module stretches the image to `640x512` and converts BGR to RGB before feeding it. The output is `float32 [1,20160,22]`; the color, number and `[0,3,2,1]` corner order go through the same decoding adapter as the `INT16_*` models, and the confidence is the value after the sigmoid. `network.logit_threshold` is compared with the raw objectness logit.
-
-OpenVINO selects among the enumerated devices in the order NPU, GPU, CPU; the environment variable `XR_ARMOR_OPENVINO_DEVICE` (for example `CPU`) sets the device. When the given device or the model fails to initialize, an error is logged and initialization ends.
-
-HailoRT runs asynchronously by default and OpenVINO runs synchronously. The environment variable `ARMOR_DETECTOR_INFERENCE_MODE` set to `sync` also makes HailoRT synchronous; `async` applies to HailoRT only, and any value other than `sync` and `async`, or `async` with OpenVINO, logs an error and leaves the pipeline stopped. The environment variable `ARMOR_DETECTOR_INFERENCE_CPU=<n>` binds the inference thread to CPU `n` (Linux).
-
-Debug environment variables: `ARMOR_DETECTOR_DUMP_TSV` gives the output file for the final-result TSV export; `ARMOR_DETECTOR_DUMP_OUTPUT_F32` and `ARMOR_DETECTOR_DUMP_OUTPUT_FRAME_INDEX` export the network output matrix of the given frame.
-
-## 3. 时间戳与坐标 / Timestamp and Coordinates
-
-时间戳：`SyncedFrame::imu.timestamp_us` 是 MCU `FRAME_TRIGGER` 对应的陀螺仪时间，作为检测统计、发布时间戳和后续链路使用的帧时间。相机设备时间 `ImageFrame::timestamp_us` 记录为诊断信息。
-
-坐标：发布的包围盒、中心和四角点使用原生传感器像素坐标，角点顺序为左上、右上、右下、左下。`center_norm`、网络解码、NMS、阈值、结果 TSV 和预览使用当前帧坐标，因此缩放、下采样或 ROI 变化时检测语义保持一致。ROI、下采样和翻转由每帧 `FrameGeometry` 描述。PnP 使用原生角点与原生标定，位姿 `pose` 位于 OpenCV 相机坐标系：`x` 向右，`y` 向下，`z` 向前。
-
-Timestamp: `SyncedFrame::imu.timestamp_us` is the gyroscope time of the MCU `FRAME_TRIGGER` and serves as the frame time for the detection statistics, the publish timestamp and the downstream chain. The camera device time `ImageFrame::timestamp_us` is recorded as diagnostic information.
-
-Coordinates: the published bounding box, center and four corner points use native sensor pixel coordinates, with the corners ordered top-left, top-right, bottom-right, bottom-left. `center_norm`, network decoding, NMS, thresholds, the result TSV and the preview use current-frame coordinates, so the detection semantics stay the same when scaling, decimation or the ROI change. The ROI, decimation and flipping are described by the per-frame `FrameGeometry`. PnP uses the native corners and the native calibration, and the pose `pose` is in the OpenCV camera frame: `x` right, `y` down, `z` forward.
-
-## 4. 构造接口 / Constructor
-
-```cpp
-template <CameraTypes::FrameLayout FrameLayoutV>
-class ArmorDetector;
-
-ArmorDetector(Sync& sync, Config cfg = DefaultConfig());  // 节选 / excerpt
+```bash
+armor-models/scripts/fetch_model.sh det-v4.0 armor-models/model_private
+armor-models/scripts/fetch_model.sh num-v1.0 armor-models/model_private
 ```
 
-模板参数：
+| 文件 / File | 后端 / Backend |
+| --- | --- |
+| `armor_det_v4.hef`、`armor_det_v4_near.hef` | Hailo-8L（HailoRT） |
+| `armor_det_v4.onnx` | OpenVINO（CPU、GPU、NPU） |
+| `armor_num_v1.onnx`、`armor_num_v1_slim.onnx` | OpenCV DNN（CPU） |
 
-- `FrameLayoutV`：帧布局，与上游 CameraFrameSync 和相机的帧布局相同。原生标定由 `CameraFrameSync::Calibration()` 在构造时复制，原始图像可以是 `640x512` 以外的尺寸。
+后端由检测模型的扩展名决定。启动时按文件名核对 SHA256，文件缺失、不认识或校验不符即致命退出，并提示下载命令。
 
-依赖：
+The backend follows the detector model's extension. At start-up each file's SHA256 is checked against the known value for its name; a missing, unknown or mismatching file is fatal and the log names the download command.
 
-- `sync`：`CameraFrameSync<FrameLayoutV>&`，提供同步帧、IMU 和原生标定。
+## 3. 处理流程 / Processing
 
-配置参数（`cfg`，类型 `Config`；`DefaultConfig()` 给出以下全部默认值）：
+```
+synced 回调 → 一格信箱（满则丢新帧，不阻塞上游）
+提交线程   → 取一个空闲推理槽，拷入 Bayer 字节，提交推理，放进在途队列
+后处理线程 → 按提交顺序等推理完成 → 解码 → NMS → 颜色过滤 → 编号 → 原生坐标 → 发布
+```
 
-- `detect_color`：保留的目标颜色，`0` 为红色，`1` 为蓝色，其他值关闭颜色过滤，默认 `1`。
-- `network.model`：模型枚举，默认 `ArmorDetectorModel::INT16_HEAD_L`。
-- `network.min_confidence`：最终置信度门限，默认 `0.1`。
-- `network.enable_quad_check`：是否检查四边形凸性和面积，默认 `true`。
-- `network.min_quad_area_px`：四边形最小面积，单位 px²，默认 `16.0`。
-- `network.logit_threshold`：objectness 预过滤门限，默认 `0.619`；`OPENVINO_640X512` 与原始 logit 比较，`INT16_*` 与 sigmoid 后的置信度比较，`INT8_*` 使用 `min_confidence` 预过滤。
-- `network.nms_threshold`：NMS 的 IoU 门限，默认 `0.45`。
-- `network.bbox_expand`：NMS 前包围盒的扩张比例，默认 `0.1`。
-- `network.max_detections`：NMS 后保留的候选数量上限，默认 `128`。
-- `referee_auto_detect_color`：按裁判系统的 robot_id 切换敌方颜色，默认 `false`。robot_id 为 1 至 99（红方）时保留蓝色，为 101 至 199（蓝方）时保留红色；收到有效 robot_id 之前使用 `detect_color`。启用时，构造函数等待 Topic `referee_topic` 出现。
-- `referee_domain`：裁判系统摘要包所在的 Topic 域，默认 `"host"`。
-- `referee_topic`：裁判系统摘要包的 Topic 名，默认 `"robot_game_ref"`。
-- `preview`：`VisionPreview::RuntimeParam`，默认关闭，`preview_window_name` 为 `"armor_detector_preview"`，`preview_scale` 为 `0.5`，`web_stream_name` 为 `"armor_detector"`，其余字段取 VisionPreview 的默认值，字段见 VisionPreview。
+- 解码：两个尺度（stride 8、16）合在一起，`sigmoid(obj) > min_confidence` 的格子取颜色、大小的 argmax，角点为 `偏移 × 4 × stride + 格心`，格心 `((j + 0.5)·stride − 0.5, (i + 0.5)·stride − 0.5)`；角点不做多格加权。
+- NMS：四个角点的外接框，`cv::dnn::NMSBoxes`，阈值 `nms_iou`，最多 50 个。
+- 编号：灰度图（`COLOR_BayerBG2GRAY`）按四个角点矫正成 36×40，减均值、除以（标准差 + 4），9 类取 argmax；`negative` 的检测丢弃。
+- 角点顺序为左上、左下、右下、右上（灯条四端点），按帧几何换算到原生像素。
 
-流水线启动后，`SetConfig()` 记录错误日志并返回。
+- Decoding: both scales (stride 8 and 16) together; cells with `sigmoid(obj) > min_confidence` take the argmax of colour and size, corners are `offset × 4 × stride + cell centre` with the centre at `((j + 0.5)·stride − 0.5, (i + 0.5)·stride − 0.5)`; corners are not averaged over cells.
+- NMS: the corners' bounding boxes, `cv::dnn::NMSBoxes`, threshold `nms_iou`, at most 50.
+- Number: the grey image (`COLOR_BayerBG2GRAY`) is rectified to 36×40 by the four corners, mean-subtracted and divided by (standard deviation + 4); argmax over 9 classes; `negative` detections are dropped.
+- Corners are ordered top-left, bottom-left, bottom-right, top-right (light-bar ends) and converted to native pixels with the frame geometry.
 
-Template parameter:
+`inflight` 是同时在推理的帧数。各后端在真实输入上的实测（640×512，含解码）：
 
-- `FrameLayoutV`: the frame layout, identical to that of the upstream CameraFrameSync and camera. The native calibration is copied from `CameraFrameSync::Calibration()` upon construction, and the raw image may have a size other than `640x512`.
+`inflight` is the number of frames in inference at once. Measured on real input (640×512, decoding included):
 
-Dependency:
+| 后端 / Backend | inflight 1：延迟 p50 / 吞吐 | inflight 2：吞吐 |
+| --- | --- | --- |
+| Hailo-8L（PI-HAILO-13T） | 4.19 ms / 235 fps | 235 fps |
+| OpenVINO NPU（Meteor Lake） | 2.43 ms / 404 fps | 490 fps |
+| OpenVINO GPU（Meteor Lake 核显） | 7.01 ms / 143 fps | 141 fps |
+| OpenVINO CPU（Meteor Lake） | 14.5 ms / 68 fps | 81 fps |
 
-- `sync`: `CameraFrameSync<FrameLayoutV>&`, providing the synchronized frames, the IMU data and the native calibration.
+Hailo 的吞吐在 inflight 1 时已到硬件上限，用 1；OpenVINO NPU 用 2。
 
-Configuration parameters (`cfg`, of type `Config`; `DefaultConfig()` gives all defaults below):
+Hailo already reaches its hardware limit with inflight 1, so it uses 1; the OpenVINO NPU uses 2.
 
-- `detect_color`: the target color to keep, `0` for red, `1` for blue, any other value disables color filtering, default `1`.
-- `network.model`: the model enum, default `ArmorDetectorModel::INT16_HEAD_L`.
-- `network.min_confidence`: the final confidence threshold, default `0.1`.
-- `network.enable_quad_check`: whether to check quadrilateral convexity and area, default `true`.
-- `network.min_quad_area_px`: the minimum quadrilateral area in px², default `16.0`.
-- `network.logit_threshold`: the objectness pre-filter threshold, default `0.619`; `OPENVINO_640X512` compares it with the raw logit, `INT16_*` with the confidence after the sigmoid, and `INT8_*` pre-filter with `min_confidence`.
-- `network.nms_threshold`: the NMS IoU threshold, default `0.45`.
-- `network.bbox_expand`: the bounding-box expansion ratio before NMS, default `0.1`.
-- `network.max_detections`: the maximum number of candidates kept after NMS, default `128`.
-- `referee_auto_detect_color`: switches the enemy color by the referee robot_id, default `false`. A robot_id from 1 to 99 (red side) keeps blue, and from 101 to 199 (blue side) keeps red; `detect_color` applies until a valid robot_id arrives. When enabled, the constructor waits for the Topic `referee_topic` to appear.
-- `referee_domain`: the Topic domain of the referee summary packet, default `"host"`.
-- `referee_topic`: the Topic name of the referee summary packet, default `"robot_game_ref"`.
-- `preview`: `VisionPreview::RuntimeParam`, disabled by default, `preview_window_name` is `"armor_detector_preview"`, `preview_scale` is `0.5` and `web_stream_name` is `"armor_detector"`, the other fields take the defaults of VisionPreview; see VisionPreview for the fields.
+## 4. 颜色 / Colour
 
-After the pipeline has started, `SetConfig()` logs an error and returns.
+`target_color` 为 `RED`、`BLUE` 或 `FROM_REFEREE`。`FROM_REFEREE` 订阅 `host` 域的裁判系统摘要包 `robot_game_ref`，按首字节的本机 robot_id 取对方颜色（1–99 为红方，101–199 为蓝方）；收到第一包之前不发布任何装甲板。
 
-## 5. Topic
+`target_color` is `RED`, `BLUE` or `FROM_REFEREE`. `FROM_REFEREE` subscribes to the referee summary `robot_game_ref` in the `host` domain and takes the opponent of the robot_id in its first byte (1–99 red, 101–199 blue); no armor is published before the first packet.
 
-| Topic | 方向 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| `sync.SyncedFrameTopicName()`（默认 `<相机图像 Topic>_synced`） | 订阅 | `const CameraFrameSync<FrameLayoutV>::SyncedFrame*` | 同步后的图像与 IMU |
-| `referee_topic`（域 `referee_domain`，默认 `host` / `robot_game_ref`） | 订阅 | 裁判系统摘要包 | 首字节为 robot_id；仅 `referee_auto_detect_color` 为 `true` 时订阅 |
-| `armors_frame`（域 `armor_detector`） | 发布 | `const DetectedFrame<FrameLayoutV>*` | 一帧的检测结果 |
-
-`DetectedFrame` 包含 `sequence`（CameraFrameSync 的帧序号）、`image`（共享图像所有权句柄）、`imu`（与图像对齐的 IMU 样本）和 `detections`（`std::vector<ArmorDetectorResult>`）。Topic 中的指针只在同步回调期间有效；异步订阅者在回调返回前复制 `DetectedFrame`，其中的 `SharedFrame` 持有 CameraBase 的图像槽位，直到最后一份副本释放。帧几何 `FrameGeometry` 从 `image` 指向的帧读取。ArmorTracker 订阅 `armor_detector` 域的 `armors_frame`。
-
-`ArmorDetectorResult` 的字段：
-
-- `color`、`number`、`type`、`priority`、`confidence`：颜色、编号、尺寸类型（`SMALL` / `LARGE`）、按编号给出的默认优先级和置信度。
-- `box`、`center`、`points`：包围盒、中心和四角点，原生传感器像素坐标。
-- `center_norm`、`distance_to_image_center`：按当前帧宽高归一化的中心，以及中心到相机主点的像素距离。
-- `pnp_valid`、`pnp_reprojection_error_px`、`pose`：PnP 是否成功、平均重投影误差（px）和装甲板在 OpenCV 相机坐标系下的位姿。
-
-| Topic | Direction | Type | Meaning |
-| --- | --- | --- | --- |
-| `sync.SyncedFrameTopicName()` (default `<camera image Topic>_synced`) | Subscribe | `const CameraFrameSync<FrameLayoutV>::SyncedFrame*` | Synchronized image and IMU |
-| `referee_topic` (domain `referee_domain`, default `host` / `robot_game_ref`) | Subscribe | Referee summary packet | The first byte is the robot_id; subscribed only when `referee_auto_detect_color` is `true` |
-| `armors_frame` (domain `armor_detector`) | Publish | `const DetectedFrame<FrameLayoutV>*` | Detection results of one frame |
-
-`DetectedFrame` contains `sequence` (the CameraFrameSync frame sequence number), `image` (the shared image ownership handle), `imu` (the IMU sample aligned with the image) and `detections` (`std::vector<ArmorDetectorResult>`). The pointer in the Topic is valid during the synchronous callback only; an asynchronous subscriber copies the `DetectedFrame` before the callback returns, and the `SharedFrame` inside holds the CameraBase image slot until the last copy is released. The frame geometry `FrameGeometry` is read from the frame that `image` points to. ArmorTracker subscribes to `armors_frame` in the `armor_detector` domain.
-
-Fields of `ArmorDetectorResult`:
-
-- `color`, `number`, `type`, `priority`, `confidence`: color, number, size type (`SMALL` / `LARGE`), the default priority derived from the number, and the confidence.
-- `box`, `center`, `points`: bounding box, center and four corner points in native sensor pixel coordinates.
-- `center_norm`, `distance_to_image_center`: the center normalized by the current-frame width and height, and the pixel distance from the center to the camera principal point.
-- `pnp_valid`, `pnp_reprojection_error_px`, `pose`: whether PnP succeeded, the mean reprojection error in px, and the armor pose in the OpenCV camera frame.
-
-## 6. 配置示例 / Configuration Example
-
-`xrobot instance add QDU-Robomaster/ArmorDetector --template-arg <FrameLayout>` 写入的实例，`sync` 填写为 CameraFrameSync 实例的 id，`cfg` 为 `DefaultConfig()` 表达式，`Config` 的默认值见第 4 节。`FrameLayout` 是常量，须与相机输出的帧布局一致：
-
-An instance written by `xrobot instance add QDU-Robomaster/ArmorDetector --template-arg <FrameLayout>`; `sync` is set to the id of a CameraFrameSync instance, and `cfg` is the `DefaultConfig()` expression, with the defaults of `Config` listed in section 4. `FrameLayout` is a constant and has to match the frame layout of the camera output:
+## 5. 配置示例 / Configuration Example
 
 ```yaml
-constexpr_namespace: AutoAimRunConfig
-constexpr_includes:
-  - CameraBase.hpp
-constexprs:
-  FrameLayout:
-    type: CameraTypes::FrameLayout
-    value: '{.width = 720, .height = 540, .step = 2160, .encoding = CameraTypes::Encoding::BGR8}'
 modules:
   - module: QDU-Robomaster/ArmorDetector
-    id: armor_detector
-    template_args:
-      - AutoAimRunConfig::FrameLayout
+    id: detector
     args:
-      - sync: camera_frame_sync
-      - cfg: ArmorDetector<AutoAimRunConfig::FrameLayout>::DefaultConfig()
+      - settings:
+          camera_name: "gimbal"
+          model_dir: "armor-models/model_private"
+          detector_model: "armor_det_v4.hef"
+          number_model: "armor_num_v1.onnx"
+          openvino_device: ""
+          min_confidence: 0.4F
+          nms_iou: 0.3F
+          target_color: TargetColor::FROM_REFEREE
+          inflight: 1
 ```
 
-`camera_frame_sync` 是 `QDU-Robomaster/CameraFrameSync` 实例的 id，列在本实例之前，两个实例的 `template_args` 相同。`referee_auto_detect_color` 为 `true` 时，Topic `robot_game_ref` 由其他实例（例如 SharedTopic）提供。
+哨兵使用 `detector_model: "armor_det_v4.onnx"`、`openvino_device: "NPU"`、`inflight: 2`。
 
-`camera_frame_sync` is the id of a `QDU-Robomaster/CameraFrameSync` instance, listed before this instance, and both instances share the same `template_args`. With `referee_auto_detect_color` set to `true`, the Topic `robot_game_ref` is provided by another instance (for example SharedTopic).
+The sentry uses `detector_model: "armor_det_v4.onnx"`, `openvino_device: "NPU"` and `inflight: 2`.
 
-## 7. 依赖与硬件 / Dependencies and Hardware
+## 6. 统计 / Statistics
 
-依赖：
+`OnMonitor` 打印发布帧数、信箱满丢弃数、装甲板数、`negative` 数、推理失败数，以及四段本地耗时（DurationStatistics）：拷入（preprocess）、等推理结果（inference）、解码到编号（postprocess）、发布（result）。
 
-- `QDU-Robomaster/CameraFrameSync`：同步帧输入与原生标定。
-- `QDU-Robomaster/VisionPreview`：检测结果预览。
-- `xrobot-org/DurationStatistics`：阶段耗时统计。
-- `QDU-Robomaster/CameraBase`：帧布局、帧几何与共享图像类型。
-- LibXR。
-- 外部库：OpenCV 与 Eigen；HailoRT（`find_package(HailoRT QUIET CONFIG)`）和 OpenVINO Runtime（`find_package(OpenVINO QUIET COMPONENTS Runtime)`，通过 `OpenVINO_DIR` 或 `CMAKE_PREFIX_PATH` 提供）按需安装，可只安装其中一个。
+`OnMonitor` prints published frames, mailbox drops, armors, `negative` detections, inference failures and four local durations (DurationStatistics): copy-in (preprocess), waiting for the result (inference), decoding to numbers (postprocess) and publishing (result).
 
-硬件：
+## 7. 测试 / Tests
 
-- HailoRT 模型运行在 Hailo 加速器上。
-- OpenVINO 模型运行在 NPU、GPU 或 CPU 上，适用于 NUC、x86 Linux 和 Webots 仿真；这些环境使用 `network.model: ArmorDetectorModel::OPENVINO_640X512`。
+- `tests/decoder_test.cpp`：用构造的张量检查解码（门限、格心、两个尺度、NMS、量化 HWC 视图），SHA-256 标准向量，编号分类器的输入小图。不需要模型文件。
+- `tests/model_test.cpp`：设置 `ARMOR_MODELS_DIR`（模型文件）与 `ARMOR_DETECTOR_GOLDEN_DIR`（Python 参考生成的帧与 `gold.txt`）后运行，否则跳过。与 Python 参考（ONNX Runtime + `rm_model.decode` + num-v1）逐项对比，再把整条模块跑一遍。
 
-Dependencies:
+- `tests/decoder_test.cpp`: decoding on constructed tensors (threshold, cell centres, both scales, NMS, the quantised HWC view), SHA-256 test vectors and the number classifier's patch. No model files needed.
+- `tests/model_test.cpp`: runs when `ARMOR_MODELS_DIR` (model files) and `ARMOR_DETECTOR_GOLDEN_DIR` (frames and `gold.txt` from the Python reference) are set, and is skipped otherwise. It compares item by item with the Python reference (ONNX Runtime + `rm_model.decode` + num-v1) and then runs the whole Module.
 
-- `QDU-Robomaster/CameraFrameSync`: synchronized frame input and native calibration.
-- `QDU-Robomaster/VisionPreview`: detection result preview.
-- `xrobot-org/DurationStatistics`: stage duration statistics.
-- `QDU-Robomaster/CameraBase`: frame layout, frame geometry and shared image types.
-- LibXR.
-- External libraries: OpenCV and Eigen; HailoRT (`find_package(HailoRT QUIET CONFIG)`) and the OpenVINO Runtime (`find_package(OpenVINO QUIET COMPONENTS Runtime)`, provided through `OpenVINO_DIR` or `CMAKE_PREFIX_PATH`) are installed as needed, and either one alone is sufficient.
+## 8. 依赖 / Dependencies
 
-Hardware:
+CameraBase、AutoAimTypes、DurationStatistics、LibXR、OpenCV（core、imgproc、dnn）；可选 HailoRT 4.24、OpenVINO 2025。
 
-- HailoRT models run on a Hailo accelerator.
-- OpenVINO models run on an NPU, GPU or CPU, which suits NUC, x86 Linux and Webots simulation; these environments use `network.model: ArmorDetectorModel::OPENVINO_640X512`.
+CameraBase, AutoAimTypes, DurationStatistics, LibXR, OpenCV (core, imgproc, dnn); optionally HailoRT 4.24 and OpenVINO 2025.

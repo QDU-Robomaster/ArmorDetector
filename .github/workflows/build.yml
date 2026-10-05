@@ -7,14 +7,15 @@ jobs:
   build:
     uses: xrobot-org/XRobot/.github/workflows/module-ci.yml@v1
     with:
-      template-args: '["CameraTypes::FrameLayout{.width=640,.height=480,.step=1920,.encoding=CameraTypes::Encoding::BGR8}"]'
+      template-args: '[]'
       image: 'ghcr.io/xrobot-org/docker-image-webots:main'
-      cmake-options: '-DOpenVINO_DIR=/opt/intel/openvino_2025.4.0/runtime/cmake -DCMAKE_REQUIRE_FIND_PACKAGE_OpenVINO=ON -DWEBOTS_HOME=/usr/local/webots'
+      apt-packages: 'libopencv-dev libeigen3-dev'
+      cmake-options: '-DOpenVINO_DIR=/opt/intel/openvino_2025.4.0/runtime/cmake -DCMAKE_REQUIRE_FIND_PACKAGE_OpenVINO=ON'
       ctest-regex: '^armor_detector_'
   build-without-inference-sdks:
     uses: xrobot-org/XRobot/.github/workflows/module-ci.yml@v1
     with:
-      template-args: '["CameraTypes::FrameLayout{.width=640,.height=480,.step=1920,.encoding=CameraTypes::Encoding::BGR8}"]'
-      image: 'ghcr.io/xrobot-org/docker-image-webots:main'
+      template-args: '[]'
+      apt-packages: 'libopencv-dev libeigen3-dev'
       cmake-options: '-DCMAKE_DISABLE_FIND_PACKAGE_OpenVINO=ON -DCMAKE_DISABLE_FIND_PACKAGE_HailoRT=ON'
       ctest-regex: '^armor_detector_'
