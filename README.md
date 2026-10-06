@@ -1,6 +1,6 @@
 # ArmorDetector
 
-装甲板检测：v4 模型直接吃原始 Bayer，解码、NMS、编号分类、颜色过滤，发布检测帧 / Armor detection: the v4 model takes raw Bayer; decode, NMS, number classification and colour filtering, then publish detected frames
+装甲板检测：v4 模型直接吃原始 Bayer，解码、NMS、编号分类、颜色过滤，发布检测帧 / Armor detection that runs the v4 model on raw Bayer, decodes, applies NMS, classifies numbers, filters colours and publishes detected frames
 
 ## 1. 模块作用 / Purpose
 
