@@ -35,7 +35,9 @@ void ArmorDetector<FrameLayoutV>::FillResultMessage(
     result.confidence = armor.confidence;
     const auto publish_geometry = armor_detector_detail::MapPublishGeometry(
         armor.points, armor.center, armor.box, geometry);
-    result.points = publish_geometry.points;
+    result.points = armor_detector_detail::CorrectLightbarKeypoints(
+        publish_geometry.points, ArmorDetectorPnPSolver::model_lightbar_length_mm,
+        cfg_.lightbar_keypoints.length_mm, cfg_.lightbar_keypoints.end_offset_px);
     result.center = publish_geometry.center;
     result.box = publish_geometry.box;
     result.center_norm = GetNormalizedCenter(bgr_img, armor.center);

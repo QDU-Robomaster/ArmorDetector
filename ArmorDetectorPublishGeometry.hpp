@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <opencv2/core.hpp>
 
@@ -8,6 +10,48 @@
 
 namespace armor_detector_detail
 {
+
+/**
+ * Maps detected light-bar end keypoints onto the PnP model end points.
+ *
+ * Corners are top-left, top-right, bottom-right, bottom-left; the light bars are TL-BL and
+ * TR-BR. The network keypoints of a bar are modeled as the projection of two points
+ * `keypoint_length_mm` apart on the bar plus a constant outward overshoot of `end_offset_px`
+ * per end (glow, blur, keypoint bias; sensor px, independent of range). Each bar keeps its
+ * midpoint and direction; its half length h becomes model/keypoint * (h - offset), so the
+ * corners again correspond to the `model_length_mm` model. Light-bar midpoints, and therefore
+ * bearing and bar separation, are unchanged. keypoint == model and offset 0 is the identity.
+ */
+[[nodiscard]] inline std::array<cv::Point2f, 4> CorrectLightbarKeypoints(
+    const std::array<cv::Point2f, 4>& points, double model_length_mm,
+    double keypoint_length_mm, double end_offset_px)
+{
+  if (!(keypoint_length_mm > 0.0) ||
+      (keypoint_length_mm == model_length_mm && end_offset_px == 0.0))
+  {
+    return points;
+  }
+  const double scale = model_length_mm / keypoint_length_mm;
+  std::array<cv::Point2f, 4> out = points;
+  for (const auto& bar : {std::array<std::size_t, 2>{0U, 3U}, std::array<std::size_t, 2>{1U, 2U}})
+  {
+    const cv::Point2d top(points[bar[0]]);
+    const cv::Point2d bottom(points[bar[1]]);
+    const cv::Point2d mid = 0.5 * (top + bottom);
+    const cv::Point2d half_vec = 0.5 * (bottom - top);
+    const double half = std::hypot(half_vec.x, half_vec.y);
+    if (!(half > 0.0))
+    {
+      continue;
+    }
+    // Never shrink a bar below half its detected length (tiny or degenerate detections).
+    const double corrected = scale * std::max(half - end_offset_px, 0.5 * half);
+    const cv::Point2d v = half_vec * (corrected / half);
+    out[bar[0]] = cv::Point2f(static_cast<float>(mid.x - v.x), static_cast<float>(mid.y - v.y));
+    out[bar[1]] = cv::Point2f(static_cast<float>(mid.x + v.x), static_cast<float>(mid.y + v.y));
+  }
+  return out;
+}
 
 /** Geometry exposed by ArmorDetector in native sensor coordinates. */
 struct PublishGeometry

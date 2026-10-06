@@ -134,6 +134,7 @@ ArmorDetector(Sync& sync, Config cfg = DefaultConfig());  // 节选 / excerpt
 - `referee_domain`：裁判系统摘要包所在的 Topic 域，默认 `"host"`。
 - `referee_topic`：裁判系统摘要包的 Topic 名，默认 `"robot_game_ref"`。
 - `preview`：`VisionPreview::RuntimeParam`，默认关闭，`preview_window_name` 为 `"armor_detector_preview"`，`preview_scale` 为 `0.5`，`web_stream_name` 为 `"armor_detector"`，其余字段取 VisionPreview 的默认值，字段见 VisionPreview。
+- `lightbar_keypoints.length_mm` / `lightbar_keypoints.end_offset_px`：灯条端点关键点标定，默认 `56.0` / `0.0`，即不改变角点。网络给出的两个端点关键点按"灯条上相距 `length_mm` 的两点、每端再向外偏 `end_offset_px` 像素"建模；发布前每根灯条绕中点缩放到 PnP 模型的 56 mm 灯条长度，灯条中点、方位和两灯条间距不变。标定方法：在比赛曝光下把装甲板放在至少 3 个经激光测距的距离（2–8 m），拟合检测到的灯条像素长度 = a·f·L/Z + b（L = 56 mm，f 为焦距，Z 为距离），取 `length_mm` = a·L、`end_offset_px` = b/2；更换曝光或镜头后重新标定。
 
 流水线启动后，`SetConfig()` 记录错误日志并返回。
 
@@ -160,6 +161,7 @@ Configuration parameters (`cfg`, of type `Config`; `DefaultConfig()` gives all d
 - `referee_domain`: the Topic domain of the referee summary packet, default `"host"`.
 - `referee_topic`: the Topic name of the referee summary packet, default `"robot_game_ref"`.
 - `preview`: `VisionPreview::RuntimeParam`, disabled by default, `preview_window_name` is `"armor_detector_preview"`, `preview_scale` is `0.5` and `web_stream_name` is `"armor_detector"`, the other fields take the defaults of VisionPreview; see VisionPreview for the fields.
+- `lightbar_keypoints.length_mm` / `lightbar_keypoints.end_offset_px`: light-bar end keypoint calibration, default `56.0` / `0.0`, which leaves the corners unchanged. The two end keypoints of a bar are modeled as two points `length_mm` apart on the bar, each shifted outward by `end_offset_px` pixels; before publishing, each bar is scaled about its midpoint to the 56 mm light-bar length of the PnP model, so the bar midpoints, the bearing and the bar separation stay unchanged. Calibration: under match exposure, place an armor at three or more laser-measured distances (2–8 m) and fit detected bar length in px = a·f·L/Z + b (L = 56 mm, f the focal length, Z the distance), then set `length_mm` = a·L and `end_offset_px` = b/2; recalibrate after changing the exposure or the lens.
 
 After the pipeline has started, `SetConfig()` logs an error and returns.
 

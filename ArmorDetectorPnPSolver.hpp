@@ -53,6 +53,11 @@ class ArmorDetectorPnPSolver
    */
   [[nodiscard]] double CalculateDistanceToCenter(const cv::Point2f& image_point) const;
 
+  /**
+   * @brief PnP 模型灯条长度（大小装甲板相同），单位 mm；发布角点表示该长度的灯条端点。
+   */
+  inline static constexpr double model_lightbar_length_mm = 56.0;
+
  private:
   /**
    * @brief 计算一组 3D/2D 对应点的平均重投影误差。
@@ -104,7 +109,7 @@ class ArmorDetectorPnPSolver
   /**
    * @brief 小装甲板高度，单位 mm。
    */
-  inline static constexpr double small_armor_height_mm = 56.0;
+  inline static constexpr double small_armor_height_mm = model_lightbar_length_mm;
 
   /**
    * @brief 大装甲板宽度，单位 mm。
@@ -114,7 +119,7 @@ class ArmorDetectorPnPSolver
   /**
    * @brief 大装甲板高度，单位 mm。
    */
-  inline static constexpr double large_armor_height_mm = 56.0;
+  inline static constexpr double large_armor_height_mm = model_lightbar_length_mm;
 };
 
 /**

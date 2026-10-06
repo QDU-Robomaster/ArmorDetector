@@ -173,6 +173,18 @@ class ArmorDetector
   };
 
   /**
+   * @brief 灯条端点关键点标定，见 CorrectLightbarKeypoints。
+   *        Light-bar end keypoint calibration, see CorrectLightbarKeypoints.
+   */
+  struct LightbarKeypointParams
+  {
+    double length_mm{ArmorDetectorPnPSolver::model_lightbar_length_mm};  ///< 网络两个端点关键点之间的灯条长度，单位 mm
+    ///< Light-bar length between the two end keypoints of the network, in mm
+    double end_offset_px{0.0};  ///< 每端关键点向外的恒定偏移，原生传感器像素
+    ///< Constant outward offset of each end keypoint, in native sensor pixels
+  };
+
+  /**
    * @brief ArmorDetector 配置。
    *        ArmorDetector configuration.
    */
@@ -195,6 +207,8 @@ class ArmorDetector
     ///< Live preview configuration, off by default
     NumberRefineParams number_refine{};  ///< 预留的 number refine 参数
     ///< Reserved number-refine parameters
+    LightbarKeypointParams lightbar_keypoints{};  ///< 灯条端点关键点标定，默认不改变角点
+    ///< Light-bar end keypoint calibration; the defaults leave the corners unchanged
   };
 
   /**
