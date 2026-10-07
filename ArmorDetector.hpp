@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: 装甲板检测：v4 模型直接吃原始 Bayer，解码、NMS、编号分类、颜色过滤，发布检测帧 / Armor detection that runs the v4 model on raw Bayer, decodes, applies NMS, classifies numbers, filters colours and publishes detected frames
+module_description: 装甲板检测：v7 模型直接吃原始 Bayer，解码、NMS、编号分类，发布所有颜色的检测帧 / Armor detection that runs the v7 model on raw Bayer, decodes, applies NMS, classifies numbers and publishes detected frames of every colour
 depends:
 - id: QDU-Robomaster/CameraBase
   ref: same-or-dev
@@ -13,6 +13,7 @@ depends:
 === END MANIFEST === */
 // clang-format on
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -44,14 +45,6 @@ depends:
 #include "OpenVinoBackend.hpp"
 #endif
 
-/// 要打的颜色 / Colour to engage.
-enum class TargetColor : uint8_t
-{
-  RED,
-  BLUE,
-  FROM_REFEREE,  ///< 按裁判系统的本机 ID 取对方颜色 / Opponent of the referee robot ID
-};
-
 /// 检测设置，与 YAML 一一对应 / Detector settings, one-to-one with the YAML.
 struct DetectorSettings
 {
@@ -63,8 +56,7 @@ struct DetectorSettings
   std::string_view openvino_device;  ///< CPU、GPU、NPU；Hailo 不用 / Unused with Hailo
   float min_confidence;              ///< 0.4
   float nms_iou;                     ///< 0.3
-  TargetColor target_color;
-  uint32_t inflight;  ///< 同时在推理的帧数 / Frames in inference at once
+  uint32_t inflight;                 ///< 同时在推理的帧数 / Frames in inference at once
 };
 
 /**
@@ -73,14 +65,16 @@ struct DetectorSettings
  *
  * 同步帧进一格信箱（满则丢弃新帧，不阻塞上游）。提交线程把原始 Bayer
  * 拷进空闲推理槽并提交；
- * 后处理线程按提交顺序等推理完成，解码、NMS、颜色过滤、编号分类，把角点换到原生坐标后发布。
- * 收进的每一帧都发布一次，没有装甲板也发。编号为非装甲板的检测丢弃。
+ * 后处理线程按提交顺序等推理完成，解码、NMS、编号分类，把角点换到原生坐标后发布。
+ * 收进的每一帧都发布一次，没有装甲板也发。所有颜色（红、蓝、紫、灭灯）都发布，打哪一种由
+ * 跟踪层决定；编号为非装甲板的检测丢弃。
  * A synced frame goes into a one-frame mailbox (a new frame is dropped when it is full,
  * without blocking upstream). The submit thread copies the raw Bayer into a free slot
  * and submits it; the post thread waits for inferences in submission order, decodes,
- * runs NMS, filters colour, classifies numbers, maps corners to native pixels and
- * publishes. Every accepted frame is published once, with or without armors.
- * Detections classified as non-armor are dropped.
+ * runs NMS, classifies numbers, maps corners to native pixels and publishes. Every
+ * accepted frame is published once, with or without armors. Every colour (red, blue,
+ * purple, off) is published and the tracker decides what to engage; detections
+ * classified as non-armor are dropped.
  */
 class ArmorDetector
 {
@@ -91,7 +85,11 @@ class ArmorDetector
     const char* file;
     const char* sha256;
   };
-  static constexpr std::array<KnownModel, 5> KNOWN_MODELS = {{
+  static constexpr std::array<KnownModel, 7> KNOWN_MODELS = {{
+      {"armor_det_v7.hef",
+       "cede6c05623bc9593c01c037da5ca482bffde62e1e1bd2f9637e5a8785e3e2d6"},
+      {"armor_det_v7.onnx",
+       "8bed4af434d0aaabb49cdb2a1e33bb47ba4b285885d495887484f637c7cc707e"},
       {"armor_det_v4.hef",
        "dc085979972e579e7fcd7e641899abb98fd72851823d9bc1c4cc57c3ecf848b0"},
       {"armor_det_v4_near.hef",
@@ -103,11 +101,6 @@ class ArmorDetector
       {"armor_num_v1_slim.onnx",
        "3d90b154c44b89896c904a36f0a5947f0ed27439a350692b13dc328a684c17d8"},
   }};
-  /// 裁判系统摘要包 Topic，首字节为本机 robot_id / Referee summary Topic; its first byte
-  /// is the robot_id.
-  static constexpr const char* REFEREE_TOPIC = "robot_game_ref";
-  static constexpr const char* REFEREE_DOMAIN = "host";
-
   explicit ArmorDetector(const DetectorSettings& settings)
       : settings_(settings),
         camera_name_(settings.camera_name),
@@ -123,14 +116,6 @@ class ArmorDetector
                            std::string(settings.openvino_device));
     REQUIRE(backend_ != nullptr);
     numbers_ = std::make_unique<NumberClassifier>(number_path);
-    target_color_.store(settings.target_color == TargetColor::RED ? int(ArmorColor::RED)
-                        : settings.target_color == TargetColor::BLUE
-                            ? int(ArmorColor::BLUE)
-                            : -1);
-    if (settings.target_color == TargetColor::FROM_REFEREE)
-    {
-      SubscribeReferee();
-    }
     for (std::size_t slot = 0; slot < backend_->Slots(); ++slot)
     {
       free_slots_.push_back(slot);
@@ -239,39 +224,6 @@ class ArmorDetector
     UNUSED(slots);
     UNUSED(device);
     return nullptr;
-  }
-
-  void SubscribeReferee()
-  {
-    referee_domain_.emplace(REFEREE_DOMAIN);
-    LibXR::Topic::TopicHandle topic =
-        LibXR::Topic::Find(REFEREE_TOPIC, &*referee_domain_);
-    if (topic == nullptr)
-    {
-      XR_LOG_ERROR("target_color FROM_REFEREE needs the Topic %s/%s", REFEREE_DOMAIN,
-                   REFEREE_TOPIC);
-      REQUIRE(false);
-    }
-    auto on_referee = LibXR::Topic::Callback::Create(
-        [](bool, ArmorDetector* self, const LibXR::ConstRawData& data)
-        {
-          if (data.addr_ == nullptr || data.size_ < 1)
-          {
-            return;
-          }
-          // 1–99 为红方，101–199 为蓝方 / 1–99 red, 101–199 blue.
-          const uint8_t id = *static_cast<const uint8_t*>(data.addr_);
-          if (id >= 1 && id < 100)
-          {
-            self->target_color_.store(int(ArmorColor::BLUE));
-          }
-          else if (id >= 101 && id < 200)
-          {
-            self->target_color_.store(int(ArmorColor::RED));
-          }
-        },
-        this);
-    LibXR::Topic(topic).RegisterCallback(on_referee);
   }
 
   void OnSynced(const AutoAim::SyncedFrame& frame)
@@ -386,16 +338,16 @@ class ArmorDetector
   {
     const std::vector<ArmorV4::Detection> detections =
         ArmorV4::Decode(outputs, settings_.min_confidence, settings_.nms_iou);
+    // 模型的颜色类：0 蓝、1 红、2 紫、3 灭灯 / Model colour classes.
+    static constexpr std::array<ArmorColor, 4> COLORS = {
+        ArmorColor::BLUE, ArmorColor::RED, ArmorColor::PURPLE, ArmorColor::OFF};
     std::vector<AutoAim::Armor> armors;
-    const int target = target_color_.load();
     cv::Mat gray;
     for (const ArmorV4::Detection& d : detections)
     {
-      const ArmorColor color = d.color == 1 ? ArmorColor::RED : ArmorColor::BLUE;
-      if (target < 0 || int(color) != target)
-      {
-        continue;  // 颜色未定或不是对方 / Colour unknown or not the opponent
-      }
+      const ArmorColor color = d.color >= 0 && d.color < static_cast<int>(COLORS.size())
+                                   ? COLORS[d.color]
+                                   : ArmorColor::UNKNOWN;
       if (gray.empty())
       {
         gray = NumberClassifier::Gray(image.data.data(), CameraTypes::FRAME_WIDTH,
@@ -445,10 +397,8 @@ class ArmorDetector
   const DetectorSettings settings_;
   const std::string camera_name_;
   LibXR::Topic detected_topic_;
-  std::optional<LibXR::Topic::Domain> referee_domain_;
   std::unique_ptr<InferenceBackend> backend_;
   std::unique_ptr<NumberClassifier> numbers_;
-  std::atomic<int> target_color_{-1};
 
   std::mutex mailbox_mutex_;
   std::condition_variable mailbox_cv_;

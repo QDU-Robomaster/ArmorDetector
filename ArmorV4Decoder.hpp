@@ -10,11 +10,13 @@
 #include <vector>
 
 /**
- * @brief v4 检测模型（armor-models det-v4）的输出解码：两个尺度合并、sigmoid 门限、
- *        角点不加权、四边形外接框 NMS。与 rm_model.decode（fuse=None）逐项一致。
- *        Output decoding of the v4 detector (armor-models det-v4): both scales merged,
- *        sigmoid threshold, unweighted corners, NMS on the quad bounding boxes. Matches
- *        rm_model.decode (fuse=None) step by step.
+ * @brief v4 输出格式（armor-models det-v4、det-v7）的解码：两个尺度合并、sigmoid 门限、
+ *        角点不加权、四边形外接框 NMS。与 rm_model.decode（fuse=None）逐项一致。颜色类数
+ *        取自张量：v4 两类，v7 四类。
+ *        Decoding of the v4 output format (armor-models det-v4, det-v7): both scales
+ *        merged, sigmoid threshold, unweighted corners, NMS on the quad bounding boxes.
+ *        Matches rm_model.decode (fuse=None) step by step. The number of colour classes
+ *        comes from the tensor: two for v4, four for v7.
  */
 namespace ArmorV4
 {
@@ -59,7 +61,7 @@ struct TensorView
 struct ScaleOutputs
 {
   TensorView obj;     ///< [1] logit
-  TensorView color;   ///< [2] logit：0 蓝、1 红 / 0 blue, 1 red
+  TensorView color;   ///< [2 或 4] logit，类别见 Detection::color / see Detection::color
   TensorView size;    ///< [2] logit：0 小、1 大 / 0 small, 1 large
   TensorView corner;  ///< [8] LT、LB、RB、RT 的 (x, y) 偏移 / (x, y) offsets
 };
@@ -72,13 +74,22 @@ struct Detection
 {
   std::array<cv::Point2f, 4> corners;  ///< LT、LB、RB、RT
   float score;
-  int color;  ///< 0 蓝、1 红 / 0 blue, 1 red
+  int color;  ///< 0 蓝、1 红、2 紫、3 灭灯 / 0 blue, 1 red, 2 purple, 3 off
   int size;   ///< 0 小、1 大 / 0 small, 1 large
 };
 
-inline int ArgMax2(const TensorView& t, int y, int x)
+/// 各通道中最大者的下标，相等取前者 / Index of the largest channel; ties go to the first.
+inline int ArgMax(const TensorView& t, int y, int x)
 {
-  return t.At(1, y, x) > t.At(0, y, x) ? 1 : 0;
+  int best = 0;
+  for (int c = 1; c < t.channels; ++c)
+  {
+    if (t.At(c, y, x) > t.At(best, y, x))
+    {
+      best = c;
+    }
+  }
+  return best;
 }
 
 /**
@@ -139,7 +150,7 @@ inline std::vector<Detection> Decode(const Outputs& outputs, float conf, float i
         // 格心按像素中心约定 / Cell centre in the pixel-centre convention.
         const float cx = (static_cast<float>(j) + 0.5F) * stride - 0.5F;
         const float cy = (static_cast<float>(i) + 0.5F) * stride - 0.5F;
-        Detection d{{}, score, ArgMax2(o.color, i, j), ArgMax2(o.size, i, j)};
+        Detection d{{}, score, ArgMax(o.color, i, j), ArgMax(o.size, i, j)};
         for (int k = 0; k < 4; ++k)
         {
           d.corners[k] = {o.corner.At(2 * k, i, j) * CORNER_UNIT * stride + cx,

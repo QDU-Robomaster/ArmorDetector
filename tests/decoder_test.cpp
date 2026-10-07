@@ -28,13 +28,14 @@ bool Near(float a, float b) { return std::fabs(a - b) < 1e-4F; }
 /// 一个尺度的 CHW 浮点张量 / Float CHW tensors of one scale.
 struct Scale
 {
-  int h, w;
+  int h, w, colors;
   std::vector<float> obj, color, size, corner;
-  Scale(int h_, int w_)
+  Scale(int h_, int w_, int colors_)
       : h(h_),
         w(w_),
+        colors(colors_),
         obj(h * w, -10.0F),
-        color(2 * h * w, 0.0F),
+        color(colors * h * w, 0.0F),
         size(2 * h * w, 0.0F),
         corner(8 * h * w, 0.0F)
   {
@@ -53,16 +54,17 @@ struct Scale
   {
     using T = ArmorV4::TensorView;
     return {T{obj.data(), T::Type::F32, false, h, w, 1},
-            T{color.data(), T::Type::F32, false, h, w, 2},
+            T{color.data(), T::Type::F32, false, h, w, colors},
             T{size.data(), T::Type::F32, false, h, w, 2},
             T{corner.data(), T::Type::F32, false, h, w, 8}};
   }
 };
 
-void TestDecode()
+/// colors 为 2（v4）或 4（v7）/ colors is 2 (v4) or 4 (v7).
+void TestDecode(int colors)
 {
-  Scale p3(64, 80);
-  Scale p4(32, 40);
+  Scale p3(64, 80, colors);
+  Scale p4(32, 40, colors);
   // LT、LB、RB、RT 的偏移，单位 4 个格子 / Offsets in units of 4 cells.
   const float plate[8] = {-0.5F, -0.25F, -0.5F, 0.25F, 0.5F, 0.25F, 0.5F, -0.25F};
   p3.Cell(10, 20, 2.0F, 1, 1, plate);  // A：红、大，得分 0.881 / red, large
@@ -75,8 +77,13 @@ void TestDecode()
   // centre and is dropped by centre containment.
   const float large[8] = {-1.0F, -0.5F, -1.0F, 0.5F, 1.0F, 0.5F, 1.0F, -0.5F};
   p4.Cell(5, 10, 1.5F, 1, 1, large);
+  if (colors == 4)
+  {
+    p4.Cell(25, 5, 0.25F, 3, 0, small);  // F：灭灯、小，得分 0.562 / off, small
+  }
   const auto dets = ArmorV4::Decode({p3.View(), p4.View()}, 0.4F, 0.3F);
-  Expect(dets.size() == 2, "A and C survive; B by NMS, E by centre containment");
+  Expect(dets.size() == (colors == 4 ? 3U : 2U),
+         "A, C (and F) survive; B by NMS, E by centre containment");
   const ArmorV4::Detection& a = dets[0];
   Expect(Near(a.score, 1.0F / (1.0F + std::exp(-2.0F))), "sigmoid score");
   Expect(a.color == 1 && a.size == 1, "argmax colour and size");
@@ -85,8 +92,12 @@ void TestDecode()
          "A LT");
   Expect(Near(a.corners[2].x, 163.5F + 16.0F) && Near(a.corners[2].y, 83.5F + 8.0F),
          "A RB");
-  const ArmorV4::Detection& c = dets[1];
+  const ArmorV4::Detection& c = dets.back();
   Expect(c.color == 0 && c.size == 0, "C blue small");
+  if (colors == 4)
+  {
+    Expect(dets[1].color == 3 && dets[1].size == 0, "F off small");
+  }
   Expect(Near(c.corners[3].x, 487.5F + 16.0F) && Near(c.corners[3].y, 327.5F - 8.0F),
          "stride 16 RT");
 }
@@ -171,7 +182,8 @@ void TestNumberPatch()
 
 int main()
 {
-  TestDecode();
+  TestDecode(2);
+  TestDecode(4);
   TestQuantizedHwcView();
   TestSha256();
   TestNumberPatch();

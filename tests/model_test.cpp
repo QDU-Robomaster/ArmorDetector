@@ -92,7 +92,7 @@ void TestAgainstPython(const std::string& models,
                        const std::map<std::string, std::vector<Gold>>& gold,
                        const std::string& golden_dir)
 {
-  OpenVinoBackend backend(models + "/armor_det_v4.onnx", 1, "CPU");
+  OpenVinoBackend backend(models + "/armor_det_v7.onnx", 1, "CPU");
   NumberClassifier numbers(models + "/armor_num_v1.onnx");
   float worst = 0.0F;
   std::size_t count = 0;
@@ -127,9 +127,8 @@ void TestModule(const std::string& models,
 {
   LibXR::Topic synced =
       LibXR::Topic::CreateTopic<const AutoAim::SyncedFrame*>("gold_synced");
-  auto* detector =
-      new ArmorDetector({"gold", models, "armor_det_v4.onnx", "armor_num_v1.onnx", "CPU",
-                         0.4F, 0.3F, TargetColor::RED, 2});
+  auto* detector = new ArmorDetector(
+      {"gold", models, "armor_det_v7.onnx", "armor_num_v1.onnx", "CPU", 0.4F, 0.3F, 2});
   struct Received
   {
     std::mutex mutex;
@@ -184,15 +183,18 @@ void TestModule(const std::string& models,
     std::vector<const Gold*> wanted;
     for (const Gold& g : expected)
     {
-      if (g.color == 1 && g.number != static_cast<int>(ArmorNumber::NEGATIVE))
+      if (g.number != static_cast<int>(ArmorNumber::NEGATIVE))
       {
-        wanted.push_back(&g);  // 只留红色且是装甲板 / Red and a real armor only
+        wanted.push_back(&g);  // 所有颜色，只去掉非装甲板 / Every colour, armors only
       }
     }
-    Expect(armors.size() == wanted.size(), "colour filter and negatives");
+    Expect(armors.size() == wanted.size(), "every colour published, negatives dropped");
+    // 模型颜色类 0 蓝、1 红、2 紫、3 灭灯 / Model colour classes.
+    static constexpr ArmorColor COLORS[4] = {ArmorColor::BLUE, ArmorColor::RED,
+                                             ArmorColor::PURPLE, ArmorColor::OFF};
     for (std::size_t i = 0; i < armors.size(); ++i)
     {
-      Expect(armors[i].color == ArmorColor::RED &&
+      Expect(armors[i].color == COLORS[wanted[i]->color] &&
                  static_cast<int>(armors[i].number) == wanted[i]->number,
              "armor colour and number");
       for (int k = 0; k < 4; ++k)
@@ -207,7 +209,7 @@ void TestModule(const std::string& models,
     }
     expected_armors += wanted.size();
   }
-  std::printf("module: %llu frames, %zu red armors\n",
+  std::printf("module: %llu frames, %zu armors\n",
               static_cast<unsigned long long>(sequence), expected_armors);
   detector->OnMonitor();
   delete detector;
