@@ -1,4 +1,5 @@
-# CMakeLists.txt for ArmorDetector
+# ArmorDetector 模块 CMake 配置。推理后端按找到的 SDK 编入：HailoRT（.hef）、OpenVINO（.onnx）。
+# Inference backends are built in for the SDKs found: HailoRT (.hef), OpenVINO (.onnx).
 
 target_include_directories(xr PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
@@ -6,66 +7,22 @@ get_filename_component(_MODULE_DIRNAME ${CMAKE_CURRENT_LIST_DIR} NAME)
 set(_DEPS_TARGET "${_MODULE_DIRNAME}_deps")
 add_library(${_DEPS_TARGET} INTERFACE)
 
-find_package(OpenCV REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
 find_package(HailoRT QUIET CONFIG)
 find_package(OpenVINO QUIET COMPONENTS Runtime)
 
-remove_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
-target_compile_definitions(xr PUBLIC _GLIBCXX_USE_CXX11_ABI=1)
-
 target_link_libraries(${_DEPS_TARGET} INTERFACE ${OpenCV_LIBS})
+target_include_directories(${_DEPS_TARGET} INTERFACE ${OpenCV_INCLUDE_DIRS})
 
 if(HailoRT_FOUND)
   target_link_libraries(${_DEPS_TARGET} INTERFACE HailoRT::libhailort)
-  target_compile_definitions(${_DEPS_TARGET}
-                             INTERFACE ARMOR_DETECTOR_HAVE_HAILORT=1)
-else()
-  message(
-    STATUS
-      "HailoRT not found; ArmorDetector will build without the HailoRT runtime backend"
-  )
+  target_compile_definitions(${_DEPS_TARGET} INTERFACE ARMOR_DETECTOR_HAVE_HAILORT=1)
 endif()
-
 if(OpenVINO_FOUND)
   target_link_libraries(${_DEPS_TARGET} INTERFACE openvino::runtime)
-  target_compile_definitions(${_DEPS_TARGET}
-                             INTERFACE ARMOR_DETECTOR_HAVE_OPENVINO=1)
-else()
-  message(STATUS "OpenVINO not found; OpenVINO models will fail explicitly at initialization")
+  target_compile_definitions(${_DEPS_TARGET} INTERFACE ARMOR_DETECTOR_HAVE_OPENVINO=1)
 endif()
-
-target_compile_definitions(
-  ${_DEPS_TARGET} INTERFACE
-  ARMOR_DETECTOR_OPENVINO_640X512_PATH="${CMAKE_CURRENT_LIST_DIR}/model/armor_detector_640x512.onnx")
-
-set(ARMOR_DETECTOR_INT8_HEAD_L_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/skd_int8_head_l.hef")
-set(ARMOR_DETECTOR_INT8_GRID_L_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/skd_int8_grid_l.hef")
-set(ARMOR_DETECTOR_INT16_HEAD_L_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/szu_int16_head_l.hef")
-set(ARMOR_DETECTOR_INT16_FAST_L_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/int16_fast_l.hef")
-set(ARMOR_DETECTOR_INT8_HEAD_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/skd_int8_head.hef")
-set(ARMOR_DETECTOR_INT8_GRID_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/skd_int8_grid.hef")
-set(ARMOR_DETECTOR_INT16_HEAD_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/szu_int16_head.hef")
-set(ARMOR_DETECTOR_INT16_FAST_HEF_FILE
-    "${CMAKE_CURRENT_LIST_DIR}/model/int16_fast.hef")
-
-target_compile_definitions(
-  ${_DEPS_TARGET}
-  INTERFACE
-    ARMOR_DETECTOR_INT8_HEAD_L_HEF_PATH="${ARMOR_DETECTOR_INT8_HEAD_L_HEF_FILE}"
-    ARMOR_DETECTOR_INT8_GRID_L_HEF_PATH="${ARMOR_DETECTOR_INT8_GRID_L_HEF_FILE}"
-    ARMOR_DETECTOR_INT16_HEAD_L_HEF_PATH="${ARMOR_DETECTOR_INT16_HEAD_L_HEF_FILE}"
-    ARMOR_DETECTOR_INT16_FAST_L_HEF_PATH="${ARMOR_DETECTOR_INT16_FAST_L_HEF_FILE}"
-    ARMOR_DETECTOR_INT8_HEAD_HEF_PATH="${ARMOR_DETECTOR_INT8_HEAD_HEF_FILE}"
-    ARMOR_DETECTOR_INT8_GRID_HEF_PATH="${ARMOR_DETECTOR_INT8_GRID_HEF_FILE}"
-    ARMOR_DETECTOR_INT16_HEAD_HEF_PATH="${ARMOR_DETECTOR_INT16_HEAD_HEF_FILE}"
-    ARMOR_DETECTOR_INT16_FAST_HEF_PATH="${ARMOR_DETECTOR_INT16_FAST_HEF_FILE}")
+message(STATUS "ArmorDetector backends: HailoRT=${HailoRT_FOUND} OpenVINO=${OpenVINO_FOUND}")
 
 set_property(GLOBAL APPEND PROPERTY XR_MODULE_DEPS ${_DEPS_TARGET})
 
